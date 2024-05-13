@@ -47,7 +47,9 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
   CCTK_REAL dummy_dYe = 0.5;
 
   // Get a recovery function
-  con2prim_mhd cv2pv(eos, 1e-5, 1, 100, 100, atmo, 1e-8, 100);
+  //con2prim_mhd cv2pv(eos, 1e-5, 1, 100, 100, atmo, 1e-8, 100);
+  con2prim_mhd cv2pv(eos,rho_strict,Ye_lenient,vw_lim,B_lim,atmo,c2p_tol,max_iter);
+
   //  con2prim_mhd cv2pv(eos, rho_strict, ye_lenient, max_z, max_b, atmo,
   //  c2p_acc,
   //                  max_iter);
@@ -125,6 +127,9 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
     // Write back pv
     pv.scatter(rho(p.I), eps(p.I), dumye, press(p.I), velx(p.I), vely(p.I),
                velz(p.I), wlor, Ex, Ey, Ez, Bvecx(p.I), Bvecy(p.I), Bvecz(p.I));
+    zvec_x(p.I) = wlor * pv.vel(0); 
+    zvec_y(p.I) = wlor * pv.vel(1);
+    zvec_z(p.I) = wlor * pv.vel(2);
 
     // Write back cv
     if (rep.adjust_cons) {

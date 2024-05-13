@@ -87,7 +87,6 @@ SCHEDULE AsterX_Sync AT postregrid
   OPTIONS: global
   SYNC: dens tau mom Avec_x Avec_y Avec_z Psi
   SYNC: saved_prims
-  SYNC: zvec
 } "Synchronize"
 
 # Time stepping
@@ -173,7 +172,9 @@ SCHEDULE AsterX_SourceTerms IN ODESolvers_RHS AFTER AsterX_Fluxes
   READS: ADMBaseX::lapse(everywhere)
   READS: ADMBaseX::shift(everywhere)
   READS: ADMBaseX::curv(everywhere)
-  READS: HydroBaseX::rho(everywhere) HydroBaseX::vel(everywhere) HydroBaseX::press(everywhere) HydroBaseX::eps(everywhere)
+  READS: HydroBaseX::rho(everywhere) HydroBaseX::press(everywhere) HydroBaseX::eps(everywhere)
+#  READS: HydroBaseX::vel(everywhere)
+  READS: zvec_x(everywhere), zvec_y(everywhere), zvec_z(everywhere)
   READS: HydroBaseX::Bvec(everywhere)
   WRITES: densrhs(interior) taurhs(interior) momrhs(interior)
   SYNC: densrhs taurhs momrhs
@@ -198,7 +199,9 @@ if(update_tmunu){
   {
     LANG: C
     READS: ADMBaseX::metric(everywhere) ADMBaseX::lapse(everywhere) ADMBaseX::shift(everywhere)
-    READS: HydroBaseX::rho(everywhere) HydroBaseX::vel(everywhere) HydroBaseX::press(everywhere) HydroBaseX::eps(everywhere)
+    READS: HydroBaseX::rho(everywhere) HydroBaseX::press(everywhere) HydroBaseX::eps(everywhere)
+#    READS: HydroBaseX::vel(everywhere)
+    READS: zvec_x(everywhere), zvec_y(everywhere), zvec_z(everywhere)
     READS: HydroBaseX::Bvec(everywhere)
     READS: TmunuBaseX::eTtt(interior) TmunuBaseX::eTti(interior) TmunuBaseX::eTij(interior)
     WRITES: TmunuBaseX::eTtt(interior) TmunuBaseX::eTti(interior) TmunuBaseX::eTij(interior)
