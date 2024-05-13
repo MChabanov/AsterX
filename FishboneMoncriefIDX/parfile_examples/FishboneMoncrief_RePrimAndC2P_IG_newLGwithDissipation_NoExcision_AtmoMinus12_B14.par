@@ -1,0 +1,652 @@
+#==============================================================================
+# Fishbone-Moncrief disk - Magnetised evolution
+#==============================================================================
+
+#------------------------------------------------------------------------------
+# Cactus parameters:
+#------------------------------------------------------------------------------
+Cactus::cctk_run_title = "Fishbone Moncrief Test Pure Hydro"
+Cactus::cctk_full_warnings         = "yes"
+
+Cactus::terminate           =  "time" #"iteration"
+Cactus::cctk_final_time     = 204.0 # 10000M
+#Cactus::terminate           =  "iteration"
+#Cactus::cctk_itlast         = 1 #1280 #320 #16 #320
+
+#------------------------------------------------------------------------------
+# Activate all necessary thorns:
+#------------------------------------------------------------------------------
+
+ActiveThorns = "Boundary CartGrid3D CoordBase Fortran InitBase IOUtil LocalReduce SymBase Time"
+ActiveThorns = "AEILocalInterp LocalInterp"
+ActiveThorns = "MoL Slab SpaceMask"
+ActiveThorns = "Carpet CarpetRegrid2 CarpetInterp CarpetIOASCII CarpetIOHDF5 CarpetIOScalar CarpetLib CarpetIOBasic CarpetReduce CarpetSlab LoopControl"
+ActiveThorns = "Formaline NaNChecker TerminationTrigger TimerReport"
+ActiveThorns = "ADMbase ADMcoupling ADMmacros CoordGauge StaticConformal"
+ActiveThorns = "Constants TmunuBase HydroBase "
+ActiveThorns = "EOS_Omni"
+ActiveThorns = "Spritz Spritz_InitData"
+ActiveThorns = "HDF5"
+ActiveThorns = "SystemStatistics"
+ActiveThorns = "FishboneMoncriefID"
+ActiveThorns = "SphericalSurface Outflow"
+ActiveThorns = "RePrimAnd RePrimAnd_Global_EOS"
+#------------------------------------------------------------------------------
+# Diagnostic parameters:
+#------------------------------------------------------------------------------
+
+CarpetLib::output_bboxes  = "no"
+CarpetLib::memstat_file    = ""
+
+CarpetReduce::verbose    = "no"
+
+TimerReport::out_every    = 320 #0
+TimerReport::out_filename = ""
+TimerReport::n_top_timers = 40
+
+#------------------------------------------------------------------------------
+# Utility parameters:
+#------------------------------------------------------------------------------
+
+#NaNChecker::check_every   =  1
+#NaNChecker::check_vars = "
+#            ADMBase::metric 
+#            ADMBase::lapse 
+#            ADMBase::shift 
+#"
+#NaNChecker::action_if_found   =  "abort" #"terminate", "just warn", "abort"
+
+#------------------------------------------------------------------------------
+# Run parameters:
+#------------------------------------------------------------------------------
+
+# Parameters of thorn AHFinderDirect (implementing AHFinderDirect)
+ActiveThorns = "AHFinderDirect"
+AHFinderDirect::find_every                             = 1 #16 #8 #1
+AHFinderDirect::geometry_interpolator_name             = "Lagrange polynomial interpolation"
+AHFinderDirect::geometry_interpolator_pars             = "order=4"
+AHFinderDirect::initial_guess__coord_sphere__radius[1] = 0.5 #for a Kerr black hole the horizon radius should be 1.22...
+AHFinderDirect::initial_guess_method[1]                = "Kerr/Kerr-Schild" #"coordinate sphere"
+AHFinderDirect::max_Newton_iterations__initial         = 500
+AHFinderDirect::max_Newton_iterations__subsequent      = 10
+AHFinderDirect::N_horizons                             = 1
+AHFinderDirect::output_BH_diagnostics                  = "yes"
+AHFinderDirect::reset_horizon_after_not_finding[1]     = "no"
+AHFinderDirect::set_mask_for_individual_horizon[1]     = "no"
+AHFinderDirect::surface_interpolator_name              = "Lagrange polynomial interpolation"
+AHFinderDirect::surface_interpolator_pars              = "order=4"
+AHFinderDirect::verbose_level                          = "physics details" #"algorithm details"
+AHFinderDirect::which_surface_to_store_info[1]         = 0
+
+#Exclude points inside the AH from the calculation of scalar quantities (e.g., maximum, minimum, norms...)
+ActiveThorns = "CarpetMask"
+carpetmask::excluded_surface[0]          = 0
+carpetmask::excluded_surface_factor[0]   = 1
+
+#------
+# Grid:
+#------
+
+Time::dtfac = 0.25
+MoL::ODE_Method             = "rk4"
+MoL::MoL_Intermediate_Steps = 4
+MoL::MoL_Num_Scratch_Levels = 1
+
+# grid parameters
+driver::ghost_size = 3
+CoordBase::boundary_size_x_lower = 3
+CoordBase::boundary_size_y_lower = 3
+CoordBase::boundary_size_z_lower = 3
+CoordBase::boundary_size_x_upper = 3
+CoordBase::boundary_size_y_upper = 3
+CoordBase::boundary_size_z_upper = 3
+
+########################## GRID SETUP: ######################################
+#
+# Choose a max M and min m for each direction and a number of cells Nc,
+# then the gridspacing is given by
+#                          dx = (M-m)/Nc
+#
+# Choose the number of refinement levels Nr, so that the most refined region
+# will have a gridspcing dxR given by
+#                          dxR = dx/(2^(Nr-1))
+#
+# Finally the effective maximum and minimum for each direction will be given
+# by
+#                          eM = M + (dxR/2)
+#                          em = m + (dxR/2)
+#
+#############################################################################
+#
+grid::avoid_origin = "no"
+CartGrid3D::type         = "coordbase"
+CoordBase::domainsize = "minmax"
+
+CoordBase::xmin = -356.94 #-1151.955
+CoordBase::ymin = -356.94 #-1151.955
+CoordBase::zmin = -356.94 #-1151.955 
+CoordBase::xmax = 357.3 # 1152.045
+CoordBase::ymax = 357.3 # 1152.045
+CoordBase::zmax = 357.3 # 1152.045
+CoordBase::dx   =     5.76
+CoordBase::dy   =     5.76
+CoordBase::dz   =     5.76
+
+TmunuBase::stress_energy_storage = yes
+TmunuBase::stress_energy_at_RHS  = yes
+TmunuBase::timelevels            =  1
+TmunuBase::prolongation_type     = none
+
+HydroBase::timelevels    = 3
+HydroBase::initial_Avec  = "zero"
+HydroBase::initial_Aphi  = "zero"
+HydroBase::initial_hydro = "FishboneMoncriefID"
+
+ADMMacros::spatial_order = 4
+
+LoopControl::initial_setup               = "tiled" #"legacy" # TRIAL - DEFAULT TO tiled
+
+# Parameters of thorn Carpet (implementing Driver)
+Carpet::domain_from_coordbase    = "yes"
+Carpet::enable_all_storage       = no
+Carpet::use_buffer_zones         = "yes"
+
+Carpet::poison_new_timelevels    = "yes"
+Carpet::check_for_poison         = "no"
+
+Carpet::init_3_timelevels        = no
+Carpet::init_fill_timelevels     = "yes"
+
+CarpetLib::poison_new_memory           = "yes"
+CarpetLib::poison_value                = 255
+CarpetLib::support_staggered_operators = "yes"
+
+# Added for debugging
+#Carpet::veryverbose              = "yes"
+
+# system specific Carpet paramters
+Carpet::max_refinement_levels    = 5 #6
+Carpet::prolongation_order_space = 5
+Carpet::prolongation_order_time  = 2
+
+# THE FOLLOWING HAS BEEN COMMENTED
+CarpetRegrid2::regrid_every = 0
+CarpetRegrid2::num_centres  = 1 #5
+
+CarpetRegrid2::num_levels_1 = 5 #6
+CarpetRegrid2::position_x_1 = 0.18 #0.09
+CarpetRegrid2::position_y_1 = 0.18 #0.09
+CarpetRegrid2::position_z_1 = 0.18 #0.09
+
+CarpetRegrid2::radius_1[1]  = 178.56 #576.0  #2.88
+CarpetRegrid2::radius_1[2]  = 89.28 #288.0  #1.44
+CarpetRegrid2::radius_1[3]  = 44.64 #144.0  #0.72
+CarpetRegrid2::radius_1[4]  = 22.32 #90.0  #0.36
+#CarpetRegrid2::radius_1[5]  = 6.12 #0.18
+#CarpetRegrid2::radius_1[6]  = 2.16 #0.09
+CarpetRegrid2::snap_to_coarse  = yes
+
+ActiveThorns = "SummationByParts"
+SummationByParts::order = 4
+
+#------------
+# Init Data
+#------------
+# init parameters
+InitBase::initial_data_setup_method = "init_some_levels"
+
+# Need 3 timelevels to do prolongation/restriction, even though metric is static:
+
+ADMBase::metric_type             = "physical"
+ADMBase::metric_timelevels       = 3
+ADMBase::lapse_timelevels        = 3
+ADMBase::shift_timelevels        = 3
+ADMBase::initial_data            = "FishboneMoncriefID"
+ADMBase::initial_lapse           = "FishboneMoncriefID"
+ADMBase::initial_shift           = "FishboneMoncriefID"
+ADMBase::initial_dtlapse         = "zero"
+ADMBase::initial_dtshift         = "zero"
+
+#ActiveThorns = "GenericFD NewRad"
+ADMBase::evolution_method        = "static"
+ADMBase::lapse_evolution_method  = "static"
+ADMBase::shift_evolution_method  = "static"
+ADMBase::dtlapse_evolution_method= "static"
+ADMBase::dtshift_evolution_method= "static"
+
+#----------------------------------
+# FishboneMoncirefID parameters
+#----------------------------------
+
+FishboneMoncriefID::a                  = 0.9 #0.9375
+FishboneMoncriefID::M                  =  2.7 #1.0
+
+FishboneMoncriefID::r_in               =  16.2  #  6M
+FishboneMoncriefID::r_at_max_density   =  32.4  # 12M
+
+# We want that the atmosphere should be proportional to rho_min*r^(-3.0/2.0)
+#FishboneMoncriefID::rho_min            =  2.529822128e-10 #at r=200, rho becomes rho_abs_min; (5/200)^-3/2 * 1e-12 (rho_abs_min=1e-12)
+FishboneMoncriefID::rho_min            = 1e-12  #at r=82
+FishboneMoncriefID::rhofact            =  1.0 # in order to have rho = rho_abs_min outside the outer boundary of the disk
+FishboneMoncriefID::rho_atmo_exp       = 0.0
+
+FishboneMoncriefID::flat_rho_in_cavity = "no" #Set rho flat in the cavity
+FishboneMoncriefID::normalize_rho      = "no"  #Not normalizing rho in the disk by its maximum value
+FishboneMoncriefID::r_flat_rho         = 5.0   #Inside that will be rho_min
+
+FishboneMoncriefID::random_min         =  0.0 # -0.02
+FishboneMoncriefID::random_max         =  0.0 # 0.02
+
+# Equation of State parameters
+FishboneMoncriefID::kappa              = 0.1556866506 #0.1587401052 #0.2154434690 #1.0e-1 #10.0 #4.249572342033184e-03
+FishboneMoncriefID::gamma              = 1.333333333333333333333333333
+
+#-----------------------------------------
+# Added for new interpolator
+#-----------------------------------------
+ActiveThorns = "WeylScal4 GenericFD Multipole"
+
+multipole::l_max                         = 4
+multipole::nphi                          = 240
+multipole::nradii                        = 1
+multipole::ntheta                        = 120
+multipole::out_every                     = 64
+multipole::output_ascii                  = yes
+multipole::output_hdf5                   = yes
+multipole::radius[0]                     = 50
+multipole::variables                     = "WeylScal4::Psi4r{sw=-2 cmplx='WeylScal4::Psi4i' name='psi4'}"
+
+weylscal4::fd_order                      = "4th"
+weylscal4::calc_scalars                  = "psis"   # Make sure this is set to psis for BNS as well
+weylscal4::calc_invariants               = "always" # Make sure this is set to always for BNS as well
+
+#------------------nanchecker--------------------------------------------------
+#
+nanchecker::action_if_found              = "abort"
+nanchecker::check_after                  = 0
+nanchecker::check_every                  = 64
+nanchecker::check_vars = "
+hydrobase::rho
+hydrobase::w_lorentz
+spritz::dens
+spritz::scon
+spritz::tau
+ADMBase::metric 
+ADMBase::lapse 
+ADMBase::shift
+"
+nanchecker::out_nanmask                  = yes
+
+#-------------------------------------
+# Spritz_InitData parameters
+#-------------------------------------
+
+Spritz_InitData::Spritz_initial_data           = "FishboneMoncrief"
+Spritz_InitData::tovmhd_timelevels             = 3
+Spritz_InitData::Avec_initial                  = "Modified" #"Standard"
+Spritz_InitData::Avec_kappa                    = 2.0 # Default for Avec_initial = "Modified"
+Spritz_InitData::curlA_method                  = "Staggered"
+Spritz_InitData::Ab1                           = 15079861625.7864 # we want initial B_max = 1e14 G
+Spritz_InitData::press_cut                     = 0.02031738472 # in order to have Pcut = press_max*press_cut = 5.5e-11 (press_max in pure hydro is 2.70704132297829e-09) #NB I was using different EOS k
+Spritz_InitData::NullA_RefLev                  = -1 # DISABLED
+Spritz_InitData::Null_Avec_in_cavity           = "yes" #Setting Avec to 0 inside the cavity given by FishboneMoncriefID::r_in
+
+#-------
+# EOS
+#-------
+
+EOS_Omni::poly_K     = 0.1556866506 #0.1587401052 #0.2154434690 #1.0e-1 #10.0 #4.249572342033184e-03
+EOS_Omni::poly_gamma = 1.333333333333333333333333333
+EOS_Omni::gl_K       = 0.1556866506 #0.1587401052 #0.2154434690 #1.0e-1 #10.0 #4.249572342033184e-03
+EOS_Omni::gl_gamma   = 1.333333333333333333333333333
+
+Spritz::Spritz_eos_type          = "General"
+Spritz::Spritz_eos_table         = "Ideal_Fluid"
+
+#----------
+# Numerics:
+#----------
+
+SpaceMask::use_mask      = "yes"
+
+# Parameters of thorn SphericalSurface (implementing SphericalSurface)
+#SphericalSurface::maxnphi         = 146
+#SphericalSurface::maxntheta       = 79
+#SphericalSurface::nghostsphi[0]   = 2
+#SphericalSurface::nghoststheta[0] = 2
+#SphericalSurface::nphi[0]         = 146
+#SphericalSurface::nsurfaces       = 1
+#SphericalSurface::ntheta[0]       = 79
+
+SphericalSurface::nsurfaces       = 6
+SphericalSurface::maxnphi         = 240
+SphericalSurface::maxntheta       = 140
+SphericalSurface::ntheta           [0] = 55
+SphericalSurface::nphi             [0] = 96
+SphericalSurface::nghoststheta     [0] = 2
+SphericalSurface::nghostsphi       [0] = 2
+SphericalSurface::symmetric_z[0]  = "no"
+
+SphericalSurface::ntheta           [1] = 55
+SphericalSurface::nphi             [1] = 96
+SphericalSurface::nghoststheta     [1] = 2
+SphericalSurface::nghostsphi       [1] = 2
+SphericalSurface::symmetric_z[1]  = "no"
+SphericalSurface::set_spherical    [1] = yes
+SphericalSurface::radius           [1] = 5.3
+
+SphericalSurface::ntheta           [2] = 55
+SphericalSurface::nphi             [2] = 96
+SphericalSurface::nghoststheta     [2] = 2
+SphericalSurface::nghostsphi       [2] = 2
+SphericalSurface::set_spherical    [2] = yes
+SphericalSurface::symmetric_z[2]  =  "no"
+SphericalSurface::radius           [2] = 16.2
+
+SphericalSurface::ntheta           [3] = 55
+SphericalSurface::nphi             [3] = 96
+SphericalSurface::nghoststheta     [3] = 2
+SphericalSurface::nghostsphi       [3] = 2
+SphericalSurface::set_spherical    [3] = yes
+SphericalSurface::symmetric_z[3]  = "no"
+SphericalSurface::radius           [3] = 32.4
+
+SphericalSurface::ntheta           [4] = 55
+SphericalSurface::nphi             [4] = 96
+SphericalSurface::nghoststheta     [4] = 2
+SphericalSurface::nghostsphi       [4] = 2
+SphericalSurface::set_spherical    [4] = yes
+SphericalSurface::symmetric_z[4]  = "no"
+SphericalSurface::radius           [4] = 100
+
+SphericalSurface::ntheta           [5] = 55
+SphericalSurface::nphi             [5] = 96
+SphericalSurface::nghoststheta     [5] = 2
+SphericalSurface::nghostsphi       [5] = 2
+SphericalSurface::set_spherical    [5] = yes
+SphericalSurface::symmetric_z[5]  = "no"
+SphericalSurface::radius           [5] = 200
+
+#############################################################
+## Outflows
+##############################################################
+Outflow::compute_every        = 32  
+Outflow::num_detectors        = 5
+Outflow::surface_index[0]     = 1
+Outflow::surface_index[1]     = 2
+Outflow::surface_index[2]     = 3
+Outflow::surface_index[3]     = 4
+Outflow::surface_index[4]     = 5
+Outflow::interpolator_name    = "Lagrange polynomial interpolation"
+Outflow::interpolator_pars    = "order=4"
+Outflow::verbose              = 0
+
+
+#-----------
+# Evolution:
+#-----------
+
+HydroBase::evolution_method      = "Spritz"
+
+# Parameters of thorn Spritz (implementing Spritz)
+Spritz::flux_type                     = "HLLE" #"LxF"
+Spritz::recon_method                  = "PPM" #"MINMOD"
+Spritz::ppm_detect                    = "yes"
+Spritz::Spritz_stencil                = 3
+Spritz::bound                         = "flat" #"none" # THIS HAS BEEN CHANGED
+Spritz::rho_abs_min		      = 1e-12 # maximum of rho is of the order of 1 for M = 2.7
+Spritz::spritz_atmo_tolerance         = 0.001
+Spritz::Spritz_Avec_Staggered         = "yes" #"no" # BE CAREFUL OF THAT!!!
+Spritz::Spritz_check_divB             = "yes"
+Spritz::Spritz_mhd_fluxCD_Lorenz      = "yes" #"yes"
+Spritz::lorenz_damp_fac               = 1.04166666666667 # = 1.5/(CFL*dx_max)= 1.5/(0.25*5.76)
+Spritz::prolongation_type_mhd         = "restrict"
+Spritz::compute_emenergy              = "yes"
+Spritz::Spritz_c2p_warn_from_reflevel = 5
+Spritz::Spritz_c2p_warnlevel          = 0
+Spritz::compute_DCandMaxima           = "no" # Default value
+
+#-----------------------
+# RePrimAnd C2P and EOS
+#----------------------
+
+Spritz::con2prim_mhd_method              = "RePrimAnd"
+RePrimAnd_Global_EOS::initial_data_eos   = "Polytrope"
+RePrimAnd_Global_EOS::poly_n             = 3.0  # n = 1/(poly_gamma - 1)
+RePrimAnd_Global_EOS::poly_rho           = 3.96711543481e+21 #in kg/m3 #poly_rho = poly_K^(-n), then convert to kg/m^3
+RePrimAnd_Global_EOS::evolution_eos      = "IdealGas" #"Hybrid"
+RePrimAnd_Global_EOS::idealgas_n         = 3.0 # n = 1/(gl_gamma - 1)
+#RePrimAnd_Global_EOS::hybrid_gamma_th    = 1.333333333333333333333333333
+RePrimAnd_Global_EOS::rho_max            = 1.0e+20 #100.0 #2.0
+RePrimAnd_Global_EOS::eps_max            = 1.0e+6
+Spritz::maximum_b                        = 100.0
+Spritz::maximum_z                        = 1.0e+3
+Spritz::y_e_linient                      = "yes"
+Spritz::Spritz_hot_atmo_Y_e              = 0.5
+hydrobase::Y_e_evolution_method          = "Spritz"
+Spritz::Spritz_y_e_min                   = 1e-10  #0.035
+Spritz::Spritz_y_e_max                   = 0.55
+Spritz::rho_strict                       = 6.4e-05
+Spritz::Spritz_mhd_tolf                  = 1.0e-8
+Spritz::Spritz_countmax                  = 300
+#Inside BH horizon
+Spritz::alp_thresh                       = 0.65
+Spritz::rho_strict_BH                    = 1.0e+6
+Spritz::maximum_b_BH                     = 1.0e+4
+Spritz::maximum_z_BH                     = 1.0e+3
+Spritz::y_e_linient_BH                   = "yes"
+
+##Excision
+Spritz::Spritz_alp_BH                 = -1 #0.65 #this excises to about r~5 CU
+Spritz::Avec_excision_coeff           = 0.5 #fraction of Spritz_alp_BH below which Avec set to zero
+Spritz::Spritz_excision_radius        = -1 #3.0
+Spritz::rho_atmo_factor               = 10.0 #multiplied to rho_abs_min to set rho within excised region when vel not zero
+
+#################################################################################
+ActiveThorns = "Hydro_Analysis"
+Hydro_Analysis::restmass_compute_masses           = "yes"
+#The following is the same has Spritz::rho_abs_min
+Hydro_Analysis::restmass_rho_min                  = 1.001e-12 #1.0e-10 #1.0e-11 #1.e-7
+#Probably it would be fine also to set the following to 0...
+Hydro_Analysis::restmass_masses_nr                = 1
+#In order to contain the entire disk.
+Hydro_Analysis::restmass_ref_radius_mass[1]       = 350.0 #80.0 #1536.0 #40.0 # BE CAREFUL OF THAT!!! # THIS HAS BEEN CHANGED
+#################################################################################
+
+ActiveThorns = "Dissipation"
+Dissipation::epsdis = 0.1
+Dissipation::order  = 5
+Dissipation::vars   = "
+  spritz::Avec_x
+  spritz::Avec_y
+  spritz::Avec_z
+  spritz::psi_mhd
+"
+Dissipation::extra_dissipation_in_horizons = "yes" 
+Dissipation::ah_max_epsdis=0.3
+Dissipation::surface_number[0] = 0
+Dissipation::horizon_number[0] = 1
+Dissipation::ah_slope = 2.0
+
+#------------------------------------------------------------------------------
+# Output:
+#------------------------------------------------------------------------------
+
+IO::out_dir = $parfile
+
+IOBasic::outInfo_every = 8 #128 #16 #2
+IOBasic::outInfo_vars  = "
+ Carpet::physical_time_per_hour
+ HydroBase::rho
+# HydroBase::press
+# Hydrobase::eps
+ Spritz::B_norm
+"
+
+#CarpetIOASCII::out1D_criterion = "time"
+#CarpetIOASCII::out1D_dt = 0.01
+CarpetIOASCII::out1D_d         = "no" #"yes" #
+CarpetIOASCII::out1D_every     = -1 #128 #16
+CarpetIOASCII::out1D_vars      = "
+  HydroBase::rho
+  HydroBase::press
+  HydroBase::eps
+  HydroBase::vel
+  HydroBase::w_lorentz
+  ADMBase::lapse
+  ADMBase::shift
+  ADMBase::metric
+  spritz::Spritz_mhd_vector_var
+  spritz::Spritz_mhd_analysis
+  spritz::Avec_x
+  spritz::Avec_y
+  spritz::Avec_z
+  spritz::dens
+  spritz::tau
+  spritz::scon
+  spritz::psi_mhd
+"
+
+# Parameters of thorn CarpetIOScalar (implementing IOScalar)
+IOScalar::outScalar_criterion  = "divisor"
+IOScalar::outScalar_dir        = "./Scalars"
+IOScalar::outScalar_every      = 8 #128 #16 #128
+IOScalar::outScalar_reductions = "minimum maximum norm1 norm2"
+IOScalar::outScalar_vars       = "
+  HydroBase::rho
+#  HydroBase::press
+#  HydroBase::eps
+#  HydroBase::vel
+#  HydroBase::w_lorentz
+#  ADMBase::lapse
+#  ADMBase::shift
+#  ADMBase::metric
+#  spritz::Spritz_mhd_vector_var
+  spritz::Spritz_mhd_analysis
+#  spritz::Avec_x
+#  spritz::Avec_y
+#  spritz::Avec_z
+#  spritz::dens
+#  spritz::tau
+#  spritz::scon
+#  spritz::psi_mhd
+#  Spritz::Spritz_mean_B
+#  spritz_initdata::rho_max_FM
+#  spritz_initdata::P_max_FM
+"
+
+IOASCII::out0D_every     = -1 #128 #16
+IOASCII::out0D_vars      = "
+ Hydro_Analysis::total_rest_mass
+ Spritz::Spritz_mean_B
+ Spritz::Spritz_total_magnetic_energy
+ outflow::outflow_flux[0]
+ outflow::outflow_flux[1]
+ outflow::outflow_flux[2]
+ outflow::outflow_flux[3]
+ outflow::outflow_flux[4]
+"
+
+#CarpetIOHDF5::out1D_d         = "yes" #
+CarpetIOHDF5::out1D_every     =  -1 #1
+#CarpeTIOHDF5::out1D_x         = "yes"
+#CarpeTIOHDF5::out1D_z         = "no" #"yes"
+#CarpeTIOHDF5::out1D_y         = "no" #"yes"
+CarpetIOHDF5::out1D_dir       = "./hdf5_1D"
+CarpetIOHDF5::out1D_criterion = "divisor"
+CarpetIOHDF5::out1D_vars      = "
+  HydroBase::rho
+  HydroBase::press
+  HydroBase::eps
+  HydroBase::vel
+  ADMBase::lapse
+  ADMBase::shift
+  ADMBase::metric
+  spritz::Spritz_mhd_vector_var
+  spritz::Spritz_mhd_analysis
+  spritz::Avec_x
+  spritz::Avec_y
+  spritz::Avec_z
+  spritz::dens
+  spritz::tau
+  spritz::scon
+  spritz::psi_mhd
+"
+
+CarpetIOHDF5::out2D_every                    = 32 #16 #10
+CarpetIOHDF5::out2D_dir = "./hdf5_2D"
+CarpetIOHDF5::out2D_criterion                    = "divisor"
+#CarpetIOHDF5::out2D_xy                       = "yes"
+#CarpetIOHDF5::out2D_xz                       = "yes" #"no"
+#CarpetIOHDF5::out2D_yz                       = "yes" #"no"
+#CarpetIOHDF5::out2D_xyplane_z                = 0.0
+CarpetIOHDF5::out2D_vars      = "
+  HydroBase::rho
+#  HydroBase::press
+#  HydroBase::eps
+#  HydroBase::vel
+#  HydroBase::w_lorentz
+#  ADMBase::lapse
+#  ADMBase::shift
+#  ADMBase::metric
+#  spritz::Spritz_mhd_vector_var
+  spritz::Spritz_mhd_analysis
+#  spritz::Avec_x
+#  spritz::Avec_y
+#  spritz::Avec_z
+#  spritz::dens
+#  spritz::tau
+#  spritz::scon
+#  spritz::psi_mhd
+"
+
+CarpetIOHDF5::out3D_every                    = -1 #1 #10
+CarpetIOHDF5::out3D_vars      = "
+  HydroBase::rho
+  HydroBase::press
+  HydroBase::eps
+  HydroBase::vel
+  HydroBase::w_lorentz
+  ADMBase::lapse
+  ADMBase::shift
+  ADMBase::metric
+  spritz::Spritz_mhd_vector_var
+  spritz::Spritz_mhd_analysis
+  spritz::Avec_x
+  spritz::Avec_y
+  spritz::Avec_z
+  spritz::dens
+  spritz::tau
+  spritz::scon
+  spritz::psi_mhd
+"
+
+# TERMINATION AND CHECKPOINTS
+
+TerminationTrigger::max_walltime = 24.0
+TerminationTrigger::on_remaining_walltime = 60.0   # minutes
+TerminationTrigger::termination_from_file   = "yes"
+TerminationTrigger::create_termination_file = "yes"
+TerminationTrigger::termination_file        = "../TERMINATE"
+TerminationTrigger::signal_names[1]         = "SIGUSR2"
+TerminationTrigger::signal_numbers[1]       = 1
+
+CarpetIOHDF5::checkpoint                         = "yes"
+CarpetIOHDF5::compression_level                  = 0
+CarpetIOHDF5::one_file_per_group                 = "no"
+CarpetIOHDF5::open_one_input_file_at_a_time      = "yes"
+CarpetIOHDF5::use_checksums                      = "yes"
+CarpetIOHDF5::use_grid_structure_from_checkpoint = "yes"
+
+IOUtil::checkpoint_dir                  = "../checkpoint"
+IOUtil::checkpoint_every                = 64000 #2048 #64000
+#IOUtil::checkpoint_every_walltime_hours = 6.0
+IOUtil::checkpoint_keep                 = 1
+IOUtil::checkpoint_on_terminate         = "yes" #"no"
+##IOUtil::out_fileinfo                    = "none"
+IOUtil::parfile_write                   = "generate"
+IOUtil::recover                         = "autoprobe"
+IOUtil::recover_dir                     = "../checkpoint"
+IOUtil::checkpoint_id                   = "no" #no
+IOUtil::abort_on_io_errors              = "yes"
+ioutil::print_timing_info               = "yes"
