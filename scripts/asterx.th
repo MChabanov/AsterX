@@ -476,7 +476,7 @@ ExternalLibraries/HDF5
 ExternalLibraries/hwloc
 ExternalLibraries/LAPACK
 ExternalLibraries/libjpeg
-ExternalLibraries/LORENE
+#DISABLED ExternalLibraries/LORENE
 ExternalLibraries/MPI
 #DISABLED ExternalLibraries/OpenBLAS
 #DISABLED ExternalLibraries/OpenCL
