@@ -210,7 +210,7 @@ extern "C" void FishboneMoncrief_Set_A(CCTK_ARGUMENTS)
 
   grid.loop_int_device<1, 0, 0>(
       grid.nghostzones,
-      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+      [=] CCTK_HOST(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
 
         CCTK_REAL xcoord = p.x;
         CCTK_REAL ycoord = p.y;
@@ -236,7 +236,7 @@ extern "C" void FishboneMoncrief_Set_A(CCTK_ARGUMENTS)
 
   grid.loop_int_device<0, 1, 0>(
       grid.nghostzones,
-      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+      [=] CCTK_HOST(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
 
         CCTK_REAL xcoord = p.x;
         CCTK_REAL ycoord = p.y;
@@ -262,7 +262,7 @@ extern "C" void FishboneMoncrief_Set_A(CCTK_ARGUMENTS)
 
   grid.loop_int_device<0, 0, 1>(
       grid.nghostzones,
-      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+      [=] CCTK_HOST(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
 
         CCTK_REAL xcoord = p.x;
         CCTK_REAL ycoord = p.y;
