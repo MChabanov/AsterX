@@ -151,10 +151,11 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
     const smat<CCTK_REAL, 3> g_inv = calc_inv(glo, detg);
 
     // Compute auxiliary variables
-    const vec<CCTK_REAL, 3> mom_low{cv.mom(0),cv.mom(1),cv.mom(2)};
+    const vec<CCTK_REAL, 3> mom_low{cv.scon(0),cv.scon(1),cv.scon(2)};
     const vec<CCTK_REAL, 3> mom_up = calc_contraction(g_inv,mom_low);
-    mom_norm(p.I)  = sqrt(calc_contraction(mom_low,mom_up)); 
+    norm_mom(p.I)  = sqrt(calc_contraction(mom_low,mom_up)); 
     sqrtgamma(p.I) = sqrt_detg;
+    lorentz(p.I) = wlor;
 
     // Update saved prims
     saved_rho(p.I) = rho(p.I);

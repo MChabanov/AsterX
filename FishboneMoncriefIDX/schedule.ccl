@@ -38,7 +38,7 @@ schedule FishboneMoncrief_ET_GRHD_initial__perturb_pressure IN HydroBaseX_Initia
 } "Add random perturbation to initial pressure, after seed magnetic fields have been set up (in case we'd like the seed magnetic fields to depend on the pristine pressures)"
 
 if (FM_Cowling) {
-  schedule FishboneMoncrief_Set_Spacetime IN CCTK_POSTREGRID
+  schedule FishboneMoncrief_Set_Spacetime IN CCTK_POSTREGRID BEFORE ODESolvers_PostStep
   {
     LANG: C
     WRITES: ADMBaseX::metric(interior)

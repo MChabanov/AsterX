@@ -50,7 +50,9 @@ CCTK_DEVICE CCTK_HOST CCTK_ATTRIBUTE_ALWAYS_INLINE inline T
 calc_contraction(const smat<T, D> &g, const vec<T, D> &v1,
                  const vec<T, D> &v2) {
   // return calc_contraction(v2, calc_contraction(g, v1));
-  return sum_symm<D>([&](int i, int j)
+//  return sum_symm<D>([&](int i, int j)
+//                         ARITH_INLINE { return g(i, j) * v1(i) * v2(j); });
+  return sum<D>([&](int i, int j)
                          ARITH_INLINE { return g(i, j) * v1(i) * v2(j); });
 }
 
