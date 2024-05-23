@@ -58,6 +58,19 @@ extern "C" void AsterX_Prim2Con_Initial(CCTK_ARGUMENTS) {
 	zvec_x(p.I) = wlor * pv.vel(0);
 	zvec_y(p.I) = wlor * pv.vel(1);
 	zvec_z(p.I) = wlor * pv.vel(2);
+
+        // Update auxiliary fields
+        // Compute contravariant metric first
+        const CCTK_REAL detg = calc_det(g);
+        const CCTK_REAL sqrt_detg = sqrt(detg);
+        const smat<CCTK_REAL, 3> g_inv = calc_inv(g, detg);
+
+        // Compute auxiliary variables
+        const vec<CCTK_REAL, 3> mom_low{cv.mom(0),cv.mom(1),cv.mom(2)};
+        const vec<CCTK_REAL, 3> mom_up = calc_contraction(g_inv,mom_low);
+        mom_norm(p.I)  = sqrt(calc_contraction(mom_low,mom_up)); 
+        sqrtgamma(p.I) = sqrt_detg;
+
       });
 
   /* Initilaize Psi to 0.0 */

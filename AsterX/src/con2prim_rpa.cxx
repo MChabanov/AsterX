@@ -38,7 +38,8 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
 
   // Setting up atmosphere
   const CCTK_REAL rho_atmo_cut = rho_abs_min * (1 + atmo_tol);
-  CCTK_REAL eps_atm = eos_id.at_rho(rho_abs_min).eps();
+  //CCTK_REAL eps_atm = eos_id.at_rho(rho_abs_min).eps();
+  CCTK_REAL eps_atm = eps_min;
   eps_atm  = eos.range_eps(rho_abs_min, Ye_atmo).limit_to(eps_atm);
   CCTK_REAL p_atm  = eos.at_rho_eps_ye(rho_abs_min, eps_atm, Ye_atmo).press();
   const atmosphere atmo(rho_abs_min, eps_atm, Ye_atmo, p_atm, rho_atmo_cut);
@@ -88,7 +89,13 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
     // Handle incorrectable errors
     if (rep.failed()) {
       CCTK_WARN(1, rep.debug_message().c_str());
+
+      cv.bcons(0) = dBx(p.I);
+      cv.bcons(1) = dBy(p.I);
+      cv.bcons(2) = dBz(p.I);
+      pv.B = cv.bcons / g.vol_elem;
       atmo.set(pv, cv, g);
+      //cv.tau = cv.dens * pv.eps + 0.5 * g.norm2(cv.bcons) / g.vol_elem;
 
       if (debug_mode) {
         // need to fix pv to computed values like pv.rho instead of rho(p.I)
@@ -98,7 +105,7 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
             "atmo: \n"
             "cctk_iteration = %i \n "
             "x, y, z = %26.16e, %26.16e, %26.16e \n "
-            "gxx, gxy, gxz, gyy, gyz, gzz = %f, %f, %f, %f, %f, %f \n "
+            "gxx, gxy, gxz, gyy, gyz, gzz = %26.16e, %26.16e, %26.16e, %26.16e, %26.16e, %26.16e \n "
             "dens = %26.16e \n tau = %26.16e \n momx = %26.16e \n "
             "momy = %26.16e \n momz = %26.16e \n dBx = %26.16e \n "
             "dBy = %26.16e \n dBz = %26.16e \n "
@@ -136,6 +143,19 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
       cv.scatter(dens(p.I), tau(p.I), dumye, momx(p.I), momy(p.I), momz(p.I),
                  dBx(p.I), dBy(p.I), dBz(p.I));
     }
+
+    // Update auxiliary fields
+    // Compute contravariant metric first
+    const CCTK_REAL detg = calc_det(glo);
+    const CCTK_REAL sqrt_detg = sqrt(detg);
+    const smat<CCTK_REAL, 3> g_inv = calc_inv(glo, detg);
+
+    // Compute auxiliary variables
+    const vec<CCTK_REAL, 3> mom_low{cv.mom(0),cv.mom(1),cv.mom(2)};
+    const vec<CCTK_REAL, 3> mom_up = calc_contraction(g_inv,mom_low);
+    mom_norm(p.I)  = sqrt(calc_contraction(mom_low,mom_up)); 
+    sqrtgamma(p.I) = sqrt_detg;
+
     // Update saved prims
     saved_rho(p.I) = rho(p.I);
     saved_velx(p.I) = velx(p.I);

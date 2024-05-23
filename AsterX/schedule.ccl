@@ -65,9 +65,11 @@ SCHEDULE AsterX_Prim2Con_Initial AT initial AFTER HydroBaseX_PostInitial
   WRITES: Psi(everywhere)
   WRITES: saved_prims
   WRITES: zvec
+  WRITES: aux_fields
   SYNC: dens tau mom dB
   SYNC: saved_prims
   SYNC: zvec
+  SYNC: aux_fields
 } "Compute conserved variables from primitive variables at initial"
 
 if(local_estimate_error)
@@ -119,11 +121,13 @@ SCHEDULE AsterX_Con2Prim IN AsterX_CalcPrim
   WRITES: HydroBaseX::rho(interior) HydroBaseX::vel(interior) HydroBaseX::eps(interior) HydroBaseX::press(interior) HydroBaseX::Bvec(interior)
   WRITES: saved_prims(interior)
   WRITES: zvec(interior)
+  WRITES: aux_fields(interior)
   WRITES: dens(interior) tau(interior) mom(interior) dB(interior)
   SYNC: con2prim_flag
   SYNC: HydroBaseX::rho HydroBaseX::vel HydroBaseX::eps HydroBaseX::press HydroBaseX::Bvec
   SYNC: saved_prims
   SYNC: zvec
+  SYNC: aux_fields
   SYNC: dens tau mom dB
 } "Calculate primitive variables from conservative variables"
 

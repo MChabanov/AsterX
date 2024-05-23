@@ -103,3 +103,9 @@ CCTK_REAL zvec TYPE=gf CENTERING={ccc} TAGS='checkpoint="no"'
 {
   zvec_x, zvec_y, zvec_z
 } ""
+
+# analysis group, move to independent thorn later
+CCTK_REAL aux_fields TYPE=gf CENTERING={ccc} TAGS='checkpoint="no"'
+{
+  norm_mom, sqrtgamma
+} "Auxiliary quantities"
