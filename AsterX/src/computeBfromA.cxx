@@ -79,6 +79,11 @@ extern "C" void AsterX_ComputedBFromdBstag(CCTK_ARGUMENTS) {
         dBx(p.I) = 0.5 * (dBx_stag(p.I) + dBx_stag(ipjk));
         dBy(p.I) = 0.5 * (dBy_stag(p.I) + dBy_stag(ijpk));
         dBz(p.I) = 0.5 * (dBz_stag(p.I) + dBz_stag(ijkp));
+
+        // Compute divergence
+        divB(p.I) = (-dBx_stag(p.I)+dBx_stag(ipjk))/CCTK_DELTA_SPACE(0)+
+                    (-dBy_stag(p.I)+dBy_stag(ijpk))/CCTK_DELTA_SPACE(1)+
+                    (-dBz_stag(p.I)+dBz_stag(ijkp))/CCTK_DELTA_SPACE(2);
       });
 }
 

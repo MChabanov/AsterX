@@ -76,13 +76,47 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
                            dummy_Ye,
                            {dBx(p.I), dBy(p.I), dBz(p.I)},
                            {dBx(p.I), dBy(p.I), dBz(p.I)}};
+
     con2prim_mhd::report rep;
+
+    // Impose limits on conservative variables
+    // Based on Appendix A of https://arxiv.org/pdf/1112.0568
+
+    // Compute contravariant metric first
+    const CCTK_REAL detg = calc_det(glo);
+    const CCTK_REAL sqrt_detg = sqrt(detg);
+    const smat<CCTK_REAL, 3> g_inv = calc_inv(glo, detg);
+
+    // Conservative variables
+    const CCTK_REAL tauL = tau(p.I);
+    const CCTK_REAL rhostar = dens(p.I);
+    vec<CCTK_REAL, 3> mom_low{momx(p.I),momy(p.I),momz(p.I)};
+    vec<CCTK_REAL, 3> mom_up = calc_contraction(g_inv,mom_low);
+    const CCTK_REAL momsqL  = calc_contraction(mom_low,mom_up);
+
+    // Rescale only inside horizon
+    if (sqrt_detg > Psi6thresh) {
+     const CCTK_REAL taufac = tauL*tauL+2.0*tauL*rhostar;
+     const CCTK_REAL qfac = 1.0 - momsqL/taufac;
+     if (qfac < qmin) {
+      mom_low = mom_low * sqrt(taufac*(1.0-qmin)/momsqL);
+     }
+    }
+
     // Note that cv are densitized, i.e. they all include sqrt_detg
+    /*
     cons_vars_mhd cv{dens(p.I),
                      tau(p.I),
                      dummy_dYe,
                      {momx(p.I), momy(p.I), momz(p.I)},
                      {dBx(p.I), dBy(p.I), dBz(p.I)}};
+    */
+    cons_vars_mhd cv{rhostar,
+                     tauL,
+                     dummy_dYe,
+                     {mom_low(0), mom_low(1), mom_low(2)},
+                     {dBx(p.I), dBy(p.I), dBz(p.I)}};
+
 
     cv2pv(pv, cv, g, rep);
 
@@ -144,15 +178,9 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
                  dBx(p.I), dBy(p.I), dBz(p.I));
     }
 
-    // Update auxiliary fields
-    // Compute contravariant metric first
-    const CCTK_REAL detg = calc_det(glo);
-    const CCTK_REAL sqrt_detg = sqrt(detg);
-    const smat<CCTK_REAL, 3> g_inv = calc_inv(glo, detg);
-
     // Compute auxiliary variables
-    const vec<CCTK_REAL, 3> mom_low{cv.scon(0),cv.scon(1),cv.scon(2)};
-    const vec<CCTK_REAL, 3> mom_up = calc_contraction(g_inv,mom_low);
+    mom_low = {cv.scon(0),cv.scon(1),cv.scon(2)};
+    mom_up = calc_contraction(g_inv,mom_low);
     norm_mom(p.I)  = sqrt(calc_contraction(mom_low,mom_up)); 
     sqrtgamma(p.I) = sqrt_detg;
     lorentz(p.I) = wlor;

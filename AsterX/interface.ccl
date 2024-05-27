@@ -109,3 +109,9 @@ CCTK_REAL aux_fields TYPE=gf CENTERING={ccc} TAGS='checkpoint="no"'
 {
   norm_mom, sqrtgamma, lorentz
 } "Auxiliary quantities"
+
+CCTK_REAL aux_fields_B TYPE=gf CENTERING={ccc} TAGS='checkpoint="no"'
+{
+  divB
+} "Auxiliary quantities"
+

@@ -150,16 +150,25 @@ extern "C" void FishboneMoncrief_ET_GRHD_initial(CCTK_ARGUMENTS)
         }
         // Outside the disk? Set to atmosphere all hydrodynamic variables!
         if(set_to_atmosphere) {
+         if(atmo_isentropic) {
           // Choose an atmosphere such that
           //   rho =       1e-5 * r^(-3/2), and
           //   P   = k rho^gamma
           // Add 1e-100 or 1e-300 to rr or rho to avoid divisions by zero.
-          rho(p.I) = 1e-5 * pow(rr + 1e-100,-3.0/2.0);
+          rho(p.I) = rho_min * pow(rr + 1e-100,-nrho);
           press(p.I) = kappa*pow(rho(p.I), gamma);
           eps(p.I) = press(p.I) / ((rho(p.I) + 1e-300) * (gamma - 1.0));
           velx(p.I) = 0.0;
           vely(p.I) = 0.0;
           velz(p.I) = 0.0;
+         } else {
+          rho(p.I) = rho_min * pow(rr + 1e-100,-nrho);
+          press(p.I) = press_min*pow(rr + 1e-100,-npress);
+          eps(p.I) = press(p.I) / ((rho(p.I) + 1e-300) * (gamma - 1.0));
+          velx(p.I) = 0.0;
+          vely(p.I) = 0.0;
+          velz(p.I) = 0.0;
+         }
         }
       });
 }

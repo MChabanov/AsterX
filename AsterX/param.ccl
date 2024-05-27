@@ -52,6 +52,16 @@ CCTK_INT unit_test_repetitions "Number of times each unit test should be repeate
   0:* :: "Must be no smaller than 0"
 } 1
 
+CCTK_REAL qmin "Sets upper limit for conserved momentum" STEERABLE=always
+{
+ [0.0:1.0) :: "Between zero and one"
+} 0.001
+
+CCTK_REAL Psi6thresh "If Psi^6 > Psi6threshold, certain limits are relaxed or imposed" STEERABLE=ALWAYS
+{
+ *:* :: "Can set to anything"
+} 1e100
+
 restricted:
 
 BOOLEAN interpolate_failed_c2p "Interpolate those grid points where c2p failed." STEERABLE=always

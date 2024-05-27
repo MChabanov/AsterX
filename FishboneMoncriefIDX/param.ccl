@@ -92,7 +92,6 @@ BOOLEAN seed_magnetic "Should we seed magnetic fields?"
 {
 } "no"
 
-
 restricted:
 CCTK_REAL A_b "Scaling factor for the vector potential"
 {
@@ -100,13 +99,43 @@ CCTK_REAL A_b "Scaling factor for the vector potential"
 } 1.0
 
 restricted:
-REAL press_cut "Cutoff based on pressure"
+CCTK_REAL press_cut "Cutoff based on pressure"
 {
   0.0:*   :: "Positive"
 } 0.04
 
 restricted:
-REAL A_n "Exponent used in the definition of A"
+CCTK_REAL A_n "Exponent used in the definition of A"
 {
   0:*     :: "Should be positive"
 } 2.0
+
+##################################
+restricted:
+BOOLEAN atmo_isentropic "Use polytropic EOS for pressure in atmosphere?"
+{
+} "no"
+
+restricted:
+CCTK_REAL rho_min "Initial atmosphere density is set according to rho_min*r^-nrho"
+{
+ [0.0:* :: ""
+} 1.0e-5
+
+restricted:
+CCTK_REAL press_min "Initial atmosphere pressure is set according to press_min*r^-npress"
+{
+  [0.0:*   :: ""
+} 1.0e-7
+
+restricted:
+CCTK_REAL nrho "Exponent of atmosphere density"
+{
+  [0.0:*     :: ""
+} 1.5
+
+restricted:
+CCTK_REAL npress "Exponent of atmosphere pressure"
+{
+  [0.0:*     :: ""
+} 2.5

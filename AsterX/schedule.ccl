@@ -44,8 +44,8 @@ SCHEDULE AsterX_ComputedBFromdBstag AT initial BEFORE AsterX_ComputeBFromdB
 {
   LANG: C
   READS: dBx_stag(everywhere) dBy_stag(everywhere) dBz_stag(everywhere)
-  WRITES: dB(interior)
-  SYNC: dB
+  WRITES: dB(interior) aux_fields_B(interior)
+  SYNC: dB aux_fields_B
 } "Calculate centered dB from dBstag"
 
 SCHEDULE AsterX_ComputeBFromdB AT initial BEFORE AsterX_Prim2Con_Initial
@@ -105,8 +105,8 @@ SCHEDULE AsterX_ComputedBFromdBstag IN AsterX_CalcPrim AFTER AsterX_ComputedBsta
 {
   LANG: C
   READS: dBx_stag(everywhere) dBy_stag(everywhere) dBz_stag(everywhere)
-  WRITES: dB(interior)
-  SYNC: dB
+  WRITES: dB(interior) aux_fields_B(interior)
+  SYNC: dB aux_fields_B
 } "Calculate centered dB from dBstag"
 
 
