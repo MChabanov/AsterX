@@ -185,6 +185,18 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
     sqrtgamma(p.I) = sqrt_detg;
     lorentz(p.I) = wlor;
 
+    const vec<CCTK_REAL, 3> B_up{pv.B(0),pv.B(1),pv.B(2)};
+    const vec<CCTK_REAL, 3> B_low = calc_contraction(glo,B_up);
+    const vec<CCTK_REAL, 3> v_up{pv.vel(0),pv.vel(1),pv.vel(2)};
+
+    const CCTK_REAL Bsq = calc_contraction(B_low,B_up);
+    const CCTK_REAL Bdotv = calc_contraction(B_low,v_up);
+    const CCTK_REAL bsq = Bsq/wlor/wlor + Bdotv*Bdotv;
+
+    normB(p.I) = sqrt(Bsq);
+    pbeta_inv(p.I) = bsq/2./fmax(pv.press,1e-16);
+    sigma(p.I) = bsq/pv.rho; 
+
     // Update saved prims
     saved_rho(p.I) = rho(p.I);
     saved_velx(p.I) = velx(p.I);

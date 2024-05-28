@@ -217,13 +217,40 @@ void GRHD_perturb_pressure(double &press, double &eps, double const &rho) {
 
 }
 
-void GRMHD_set_A(double const &press, double const &xtilde, double const &ytilde, double &Ax, double &Ay, double &Az) {
+//void GRMHD_set_A(double const &press, double const &xtilde, double const &ytilde, double &Ax, double &Ay, double &Az) {
+//
+//  DECLARE_CCTK_PARAMETERS;
+//
+//  Ax = - A_b * pow(fmax(press-press_cut,0.),A_n) * ytilde;
+//  Ay =   A_b * pow(fmax(press-press_cut,0.),A_n) * xtilde;
+//  Az = 0.;
+//}
+
+void GRMHD_set_A(double const &press, double const &rho, double const &xtilde, double const &ytilde, double &Ax, double &Ay, double &Az) {
 
   DECLARE_CCTK_PARAMETERS;
 
-  Ax = - A_b * pow(fmax(press-press_cut,0.),A_n) * ytilde;
-  Ay =   A_b * pow(fmax(press-press_cut,0.),A_n) * xtilde;
-  Az = 0.;
+  const double rcyl = fmax(sqrt(xtilde*xtilde+ytilde*ytilde),1e-15);
+
+  // If A_{\theta} = A_r = 0:
+  // A_x = (-y/rcyl/rcyl)*A_{\phi}
+  // A_y = (x/rcyl/rcyl)*A_{\phi}
+  // A_z = 0
+  
+  if (use_pressure) {
+
+   Ax = - A_b * pow(fmax(press-press_cut,0.),A_n) * ytilde * pow(rcyl,A_c-2.);
+   Ay =   A_b * pow(fmax(press-press_cut,0.),A_n) * xtilde * pow(rcyl,A_c-2.);
+   Az = 0.;
+
+  } else {
+
+   Ax = - A_b * pow(fmax(rho-rho_cut,0.),A_n) * ytilde * pow(rcyl,A_c-2.);
+   Ay =   A_b * pow(fmax(rho-rho_cut,0.),A_n) * xtilde * pow(rcyl,A_c-2.);
+   Az = 0.;
+
+  }
+
 }
 
 } // end namespace FMdisk

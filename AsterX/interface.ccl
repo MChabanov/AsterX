@@ -107,7 +107,7 @@ CCTK_REAL zvec TYPE=gf CENTERING={ccc} TAGS='checkpoint="no"'
 # analysis group, move to independent thorn later
 CCTK_REAL aux_fields TYPE=gf CENTERING={ccc} TAGS='checkpoint="no"'
 {
-  norm_mom, sqrtgamma, lorentz
+  norm_mom, sqrtgamma, lorentz, normB, pbeta_inv, sigma
 } "Auxiliary quantities"
 
 CCTK_REAL aux_fields_B TYPE=gf CENTERING={ccc} TAGS='checkpoint="no"'

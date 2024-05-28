@@ -104,11 +104,27 @@ CCTK_REAL press_cut "Cutoff based on pressure"
   0.0:*   :: "Positive"
 } 0.04
 
+CCTK_REAL rho_cut "Cutoff based on density"
+{
+  0.0:*   :: "Positive"
+} 0.2
+
 restricted:
 CCTK_REAL A_n "Exponent used in the definition of A"
 {
   0:*     :: "Should be positive"
 } 2.0
+
+restricted:
+CCTK_REAL A_c "Exponent used for cylindrical radius"
+{
+  *:*     :: "Should be positive"
+} 2.0
+
+restricted:
+BOOLEAN use_pressure "Use pressure to set up vector potential, otherwise density"
+{
+} "yes"
 
 ##################################
 restricted:

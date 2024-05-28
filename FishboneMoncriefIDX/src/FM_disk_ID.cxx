@@ -233,12 +233,13 @@ extern "C" void FishboneMoncrief_Set_A(CCTK_ARGUMENTS)
         CCTK_REAL ytilde = ycoord - r_at_max_density*sinphi;
 
         CCTK_REAL pressL_stag = FM_Utils::calc_avg_c2e(press,p,0);
+        CCTK_REAL rhoL_stag = FM_Utils::calc_avg_c2e(rho,p,0);
 
         CCTK_REAL AxL = 0.;
         CCTK_REAL AyL = 0.;
         CCTK_REAL AzL = 0.;
 
-        FMdisk::GRMHD_set_A(pressL_stag,xtilde,ytilde,AxL,AyL,AzL);
+        FMdisk::GRMHD_set_A(pressL_stag,rhoL_stag,xtilde,ytilde,AxL,AyL,AzL);
 
         Avec_x(p.I) = AxL;
       });
@@ -259,12 +260,13 @@ extern "C" void FishboneMoncrief_Set_A(CCTK_ARGUMENTS)
         CCTK_REAL ytilde = ycoord - r_at_max_density*sinphi;
 
         CCTK_REAL pressL_stag = FM_Utils::calc_avg_c2e(press,p,1);
+        CCTK_REAL rhoL_stag = FM_Utils::calc_avg_c2e(rho,p,0);
 
         CCTK_REAL AxL = 0.;
         CCTK_REAL AyL = 0.;
         CCTK_REAL AzL = 0.;
 
-        FMdisk::GRMHD_set_A(pressL_stag,xtilde,ytilde,AxL,AyL,AzL);
+        FMdisk::GRMHD_set_A(pressL_stag,rhoL_stag,xtilde,ytilde,AxL,AyL,AzL);
 
         Avec_y(p.I) = AyL;
       });
@@ -285,12 +287,13 @@ extern "C" void FishboneMoncrief_Set_A(CCTK_ARGUMENTS)
         CCTK_REAL ytilde = ycoord - r_at_max_density*sinphi;
 
         CCTK_REAL pressL_stag = FM_Utils::calc_avg_c2e(press,p,2);
+        CCTK_REAL rhoL_stag = FM_Utils::calc_avg_c2e(rho,p,0);
 
         CCTK_REAL AxL = 0.;
         CCTK_REAL AyL = 0.;
         CCTK_REAL AzL = 0.;
 
-        FMdisk::GRMHD_set_A(pressL_stag,xtilde,ytilde,AxL,AyL,AzL);
+        FMdisk::GRMHD_set_A(pressL_stag,rhoL_stag,xtilde,ytilde,AxL,AyL,AzL);
 
         Avec_z(p.I) = AzL;
       });

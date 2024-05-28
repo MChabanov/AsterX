@@ -2,6 +2,8 @@
 
 #include <loop_device.hxx>
 
+#include <cmath>
+
 #include <cctk.h>
 #include <cctk_Arguments.h>
 #include <cctk_Parameters.h>
@@ -72,6 +74,16 @@ extern "C" void AsterX_Prim2Con_Initial(CCTK_ARGUMENTS) {
         sqrtgamma(p.I) = sqrt_detg;
         lorentz(p.I) = wlor;
 
+        const vec<CCTK_REAL, 3> B_up{pv.Bvec(0),pv.Bvec(1),pv.Bvec(2)};
+        const vec<CCTK_REAL, 3> B_low = calc_contraction(g,B_up);
+
+        const CCTK_REAL Bsq = calc_contraction(B_low,B_up);
+        const CCTK_REAL Bdotv = calc_contraction(B_low,v_up);
+        const CCTK_REAL bsq = Bsq/wlor/wlor + Bdotv*Bdotv;
+
+        normB(p.I) = sqrt(Bsq);
+        pbeta_inv(p.I) = bsq/2./fmax(pv.press,1e-16);
+        sigma(p.I) = bsq/pv.rho; 
       });
 
   /* Initilaize Psi to 0.0 */

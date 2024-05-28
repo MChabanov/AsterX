@@ -59,7 +59,7 @@ if (seed_magnetic) {
   {
     LANG: C
 
-    READS: HydroBaseX::press(everywhere)
+    READS: HydroBaseX::press(everywhere) HydroBaseX::rho(everywhere)
 
     WRITES: AsterX::Avec_x(interior)
     WRITES: AsterX::Avec_y(interior)
