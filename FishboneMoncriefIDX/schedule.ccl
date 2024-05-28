@@ -52,6 +52,21 @@ if (FM_Cowling) {
     SYNC: ADMBaseX::dtlapse ADMBaseX::dtshift
 
   } "Set ADM variables for FM torus"
+
+  schedule FishboneMoncrief_Set_Spacetime IN CCTK_POST_RECOVER_VARIABLES
+  {
+    LANG: C
+    WRITES: ADMBaseX::metric(interior)
+    WRITES: ADMBaseX::lapse(interior)
+    WRITES: ADMBaseX::shift(interior)
+    WRITES: ADMBaseX::curv(interior)
+    WRITES: ADMBaseX::dtlapse(interior)
+    WRITES: ADMBaseX::dtshift(interior)
+
+    SYNC: ADMBaseX::metric ADMBaseX::lapse ADMBaseX::shift ADMBaseX::curv
+    SYNC: ADMBaseX::dtlapse ADMBaseX::dtshift
+
+  } "Set ADM variables for FM torus"
 }
 
 if (seed_magnetic) {
