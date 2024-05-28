@@ -229,8 +229,8 @@ extern "C" void FishboneMoncrief_Set_A(CCTK_ARGUMENTS)
         CCTK_REAL cosphi = xcoord/rcyl;
         CCTK_REAL sinphi = ycoord/rcyl;
 
-        CCTK_REAL xtilde = xcoord - r_at_max_density*cosphi;
-        CCTK_REAL ytilde = ycoord - r_at_max_density*sinphi;
+        CCTK_REAL xtilde = wrt_rho_max ? xcoord - r_at_max_density*cosphi : xcoord;
+        CCTK_REAL ytilde = wrt_rho_max ? ycoord - r_at_max_density*sinphi : ycoord;
 
         CCTK_REAL pressL_stag = FM_Utils::calc_avg_c2e(press,p,0);
         CCTK_REAL rhoL_stag = FM_Utils::calc_avg_c2e(rho,p,0);
@@ -256,8 +256,8 @@ extern "C" void FishboneMoncrief_Set_A(CCTK_ARGUMENTS)
         CCTK_REAL cosphi = xcoord/rcyl;
         CCTK_REAL sinphi = ycoord/rcyl;
 
-        CCTK_REAL xtilde = xcoord - r_at_max_density*cosphi;
-        CCTK_REAL ytilde = ycoord - r_at_max_density*sinphi;
+        CCTK_REAL xtilde = wrt_rho_max ? xcoord - r_at_max_density*cosphi : xcoord;
+        CCTK_REAL ytilde = wrt_rho_max ? ycoord - r_at_max_density*sinphi : ycoord;
 
         CCTK_REAL pressL_stag = FM_Utils::calc_avg_c2e(press,p,1);
         CCTK_REAL rhoL_stag = FM_Utils::calc_avg_c2e(rho,p,0);
@@ -283,8 +283,8 @@ extern "C" void FishboneMoncrief_Set_A(CCTK_ARGUMENTS)
         CCTK_REAL cosphi = xcoord/rcyl;
         CCTK_REAL sinphi = ycoord/rcyl;
 
-        CCTK_REAL xtilde = xcoord - r_at_max_density*cosphi;
-        CCTK_REAL ytilde = ycoord - r_at_max_density*sinphi;
+        CCTK_REAL xtilde = wrt_rho_max ? xcoord - r_at_max_density*cosphi : xcoord;
+        CCTK_REAL ytilde = wrt_rho_max ? ycoord - r_at_max_density*sinphi : ycoord;
 
         CCTK_REAL pressL_stag = FM_Utils::calc_avg_c2e(press,p,2);
         CCTK_REAL rhoL_stag = FM_Utils::calc_avg_c2e(rho,p,0);

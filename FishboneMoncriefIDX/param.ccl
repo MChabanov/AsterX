@@ -93,6 +93,11 @@ BOOLEAN seed_magnetic "Should we seed magnetic fields?"
 } "no"
 
 restricted:
+BOOLEAN wrt_rho_max "Use location of maximum density to seed A?"
+{
+} "yes"
+
+restricted:
 CCTK_REAL A_b "Scaling factor for the vector potential"
 {
  *:* :: ""
