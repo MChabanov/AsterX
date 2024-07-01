@@ -11,6 +11,7 @@ KEYWORD test_type "Type of test to set up" STEERABLE=never
 KEYWORD test_case "Name of the testcase" STEERABLE=never
 {
   "equilibrium"              :: ""
+  "press_equilibrium"        :: ""
   "sound wave"               :: ""
   "Alfven wave"              :: ""
   "shock tube"               :: ""
@@ -18,6 +19,7 @@ KEYWORD test_case "Name of the testcase" STEERABLE=never
   "Balsara2"                 :: ""
   "Balsara3"                 :: ""
   "Balsara4"                 :: ""
+  "Balsara4_hd"              :: ""
   "Balsara5"                 :: ""
 
   "cylindrical blast"        :: ""
@@ -55,6 +57,23 @@ KEYWORD shock_dir "Shock direction" STEERABLE=never
   "y" :: "Parallel to y axis"
   "z" :: "Parallel to z axis"
 } "x"
+
+# pressure equilibrium test
+
+REAL peq_p "Fixed constant pressure"
+{
+  0.0:*   :: "Positive"
+} 1
+
+REAL peq_lrho "Density for x<0"
+{
+  0.0:*   :: "Positive"
+} 1e-5
+
+REAL peq_rrho "Density for x>0"
+{
+  0.0:*   :: "Positive"
+} 10
 
 # parameters for 2D tests
 
