@@ -1,0 +1,10 @@
+IMPLEMENTS: TestEOS
+
+INHERITS: ADMBaseX CarpetX HydroBaseX AsterX
+
+USES INCLUDE HEADER: fixmath.hxx
+USES INCLUDE HEADER: loop_device.hxx
+USES INCLUDE HEADER: loop.hxx
+USES INCLUDE HEADER: setup_eos.hxx
+
+CCTK_REAL dumdum TYPE=gf CENTERING={ccc} "Dummy variable"
