@@ -162,6 +162,7 @@ SCHEDULE AsterX_Fluxes IN ODESolvers_RHS
   READS: HydroBaseX::rho(everywhere) HydroBaseX::vel(everywhere) HydroBaseX::press(everywhere) HydroBaseX::eps(everywhere)
   READS: HydroBaseX::Bvec(everywhere)
   READS: zvec_x(everywhere) zvec_y(everywhere) zvec_z(everywhere)
+  READS: dBx_stag(everywhere) dBy_stag(everywhere) dBz_stag(everywhere)
   READS: Avec_x(everywhere) Avec_y(everywhere) Avec_z(everywhere) Psi(everywhere)
   WRITES: flux_x(interior) flux_y(interior) flux_z(interior)
   WRITES: Aux_in_RHSof_A_Psi(interior)
