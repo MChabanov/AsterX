@@ -221,38 +221,24 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType &eos_th) {
           eos_th.press_from_valid_rho_eps_ye(rho_rc(1), eps_min, ye_rc(1));
     }
 
-    //const vec<vec<CCTK_REAL, 2>, 3> Bs_rc([&](int i) ARITH_INLINE {
-    //  return vec<CCTK_REAL, 2>{reconstruct_pt(gf_Bvecs(i), p, false, false)};
-    //});
-
     // Introduce reconstructed dBs
     // Use staggered dB for i == dir
 
     vec<vec<CCTK_REAL, 2>, 3> Bs_rc([&](int i) ARITH_INLINE {
       return vec<CCTK_REAL, 2>{reconstruct_pt(gf_Bvecs(i), p, false, false)};
     });
-
-    //const vec<vec<CCTK_REAL, 2>, 3> dBs_rc([&](int j) ARITH_INLINE {
-    //  return vec<CCTK_REAL, 2>([&](int f) ARITH_INLINE {
-    //     return Bs_rc(j)(f)*sqrtg;
-    //  }); 
-    //});
     
     if (dir==0) {
-      //dBs_rc(dir)(0) = dBx_stag(p.I);
       Bs_rc(dir)(0) = dBx_stag(p.I)/sqrtg;
     } else if (dir==1) {
-      //dBs_rc(dir)(0) = dBy_stag(p.I);
       Bs_rc(dir)(0) = dBy_stag(p.I)/sqrtg;
     } else if (dir==2) {
-      //dBs_rc(dir)(0) = dBz_stag(p.I);
       Bs_rc(dir)(0) = dBz_stag(p.I)/sqrtg;
     } else {
       printf("This shouldn't happen.");
       assert(0);
     }
 
-    //dBs_rc(dir)(1) = dBs_rc(dir)(0);
     Bs_rc(dir)(1) = Bs_rc(dir)(0);
 
     // End of setting dBs
