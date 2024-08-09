@@ -45,6 +45,7 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p) {
   /* grid functions */
   const vec<GF3D2<const CCTK_REAL>, dim> gf_vels{velx, vely, velz};
   const vec<GF3D2<const CCTK_REAL>, dim> gf_Bvecs{Bvecx, Bvecy, Bvecz};
+  const vec<GF3D2<const CCTK_REAL>, dim> gf_dBstags{dBx_stag, dBy_stag, dBz_stag};
   const vec<GF3D2<const CCTK_REAL>, dim> gf_beta{betax, betay, betaz};
   const smat<GF3D2<const CCTK_REAL>, dim> gf_g{gxx, gxy, gxz, gyy, gyz, gzz};
 
@@ -155,6 +156,10 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p) {
   constexpr array<int, dim> face_centred = {!(dir == 0), !(dir == 1),
                                             !(dir == 2)};
 
+  constexpr array<int, dim> dir_arr = {(dir==0) ? 2 : ( (dir==1) ? 0 : 1 ), 
+                                       dir,
+                                       (dir==0) ? 1 : ( (dir==1) ? 2 : 0 )};
+
   grid.loop_int_device<
       face_centred[0], face_centred[1],
       face_centred
@@ -193,10 +198,6 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p) {
           eos_3p->press_from_valid_rho_eps_ye(rho_rc(1), eos_3p->rgeps.min, ye_rc(1));
     }
 
-    const vec<vec<CCTK_REAL, 2>, 3> Bs_rc([&](int i) ARITH_INLINE {
-      return vec<CCTK_REAL, 2>{reconstruct_pt(gf_Bvecs(i), p, false, false)};
-    });
-
     /* Interpolate metric components from vertices to faces */
     const CCTK_REAL alp_avg = calc_avg_v2f(alp, p, dir);
     const vec<CCTK_REAL, 3> betas_avg(
@@ -220,6 +221,26 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p) {
     const vec<CCTK_REAL, 2> w_lorentz_rc([&](int f) ARITH_INLINE {
       return 1 / sqrt(1 - calc_contraction(vlows_rc, vels_rc)(f));
     });
+
+    // Introduce reconstructed Bs
+    // Use staggered dB for i == dir
+
+    vec<vec<CCTK_REAL, 2>, 3> Bs_rc;
+    array<CCTK_REAL,2> Bs_rc_dummy; // note: can't copy array<,2> to vec<,2>, only construct
+
+    Bs_rc(dir)(0) = gf_dBstags(dir)(p.I)/sqrtg;
+    Bs_rc(dir)(1) = Bs_rc(dir)(0);
+
+    Bs_rc_dummy = reconstruct_pt(gf_Bvecs(dir_arr[0]), p, false, false);
+    Bs_rc(dir_arr[0])(0) = Bs_rc_dummy[0];
+    Bs_rc(dir_arr[0])(1) = Bs_rc_dummy[1];
+
+    Bs_rc_dummy = reconstruct_pt(gf_Bvecs(dir_arr[2]), p, false, false);
+    Bs_rc(dir_arr[2])(0) = Bs_rc_dummy[0];
+    Bs_rc(dir_arr[2])(1) = Bs_rc_dummy[1];
+
+    // End of setting Bs
+
 
     /* alpha * b0 = W * B^i * v_i */
     const vec<CCTK_REAL, 2> alp_b0_rc([&](int f) ARITH_INLINE {
