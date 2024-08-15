@@ -48,6 +48,13 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p) {
   const vec<GF3D2<const CCTK_REAL>, dim> gf_dBstags{dBx_stag, dBy_stag, dBz_stag};
   const vec<GF3D2<const CCTK_REAL>, dim> gf_beta{betax, betay, betaz};
   const smat<GF3D2<const CCTK_REAL>, dim> gf_g{gxx, gxy, gxz, gyy, gyz, gzz};
+  /* grid functions for Upwind CT */
+  const vec<GF3D2<CCTK_REAL>, dim> vtildes_one{vtilde_y_xface, vtilde_z_yface,
+                                               vtilde_x_zface};
+  const vec<GF3D2<CCTK_REAL>, dim> vtildes_two{vtilde_z_xface, vtilde_x_yface,
+                                               vtilde_y_zface};
+  const vec<GF3D2<CCTK_REAL>, dim> amax{amax_xface, amax_yface, amax_zface};
+  const vec<GF3D2<CCTK_REAL>, dim> amin{amin_xface, amin_yface, amin_zface};
 
   static_assert(dir >= 0 && dir < 3, "");
 
@@ -469,6 +476,31 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p) {
       printf("  vtilde_rc = %16.8e, %16.8e.\n", vtilde_rc(0), vtilde_rc(1));
       assert(0);
     }
+
+    /* Begin code for upwindCT */
+        // if dir==0: dir1=1, dir2=2 | dir==1: dir1=2, dir2=0 | dir==2; dir1=0,
+        // dir2=1
+
+        const int dir1 = (dir == 0) ? 1 : ((dir == 1) ? 2 : 0);
+        const int dir2 = (dir == 0) ? 2 : ((dir == 1) ? 0 : 1);
+
+        amax(dir)(p.I) = max({CCTK_REAL(0), lambda(0)(0), lambda(0)(1),
+                              lambda(0)(2), lambda(0)(3), lambda(1)(0),
+                              lambda(1)(1), lambda(1)(2), lambda(1)(3)});
+
+        amin(dir)(p.I) = -1 * (min({CCTK_REAL(0), lambda(0)(0), lambda(0)(1),
+                                    lambda(0)(2), lambda(0)(3), lambda(1)(0),
+                                    lambda(1)(1), lambda(1)(2), lambda(1)(3)}));
+
+        vtildes_one(dir)(p.I) = (amax(dir)(p.I) * vtildes_rc(dir1)(0) +
+                                 amin(dir)(p.I) * vtildes_rc(dir1)(1)) /
+                                (amax(dir)(p.I) + amin(dir)(p.I));
+        vtildes_two(dir)(p.I) = (amax(dir)(p.I) * vtildes_rc(dir2)(0) +
+                                 amin(dir)(p.I) * vtildes_rc(dir2)(1)) /
+                                (amax(dir)(p.I) + amin(dir)(p.I));
+
+        /* End code for upwindCT */
+
   });
 }
 
