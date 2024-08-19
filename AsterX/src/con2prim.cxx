@@ -55,28 +55,45 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
 
   const smat<GF3D2<const CCTK_REAL>, 3> gf_g{gxx, gxy, gxz, gyy, gyz, gzz};
 
-  // Setting up atmosphere
-  const CCTK_REAL rho_atmo_cut = rho_abs_min * (1 + atmo_tol);
-  const CCTK_REAL gm1 = eos_cold.gm1_from_valid_rmd(rho_abs_min);
-  CCTK_REAL eps_atm = eos_cold.sed_from_valid_gm1(gm1);
-  eps_atm = std::min(std::max(eos_th.rgeps.min, eps_atm), eos_th.rgeps.max);
-  const CCTK_REAL p_atm =
-      eos_th.press_from_valid_rho_eps_ye(rho_abs_min, eps_atm, Ye_atmo);
-  atmosphere atmo(rho_abs_min, eps_atm, Ye_atmo, p_atm, rho_atmo_cut);
-
-  // Construct Noble c2p object:
-  c2p_2DNoble c2p_Noble(eos_th, atmo, max_iter, c2p_tol, rho_strict, vw_lim,
-                        B_lim, Ye_lenient);
-
-  // Construct Palenzuela c2p object:
-  c2p_1DPalenzuela c2p_Pal(eos_th, atmo, max_iter, c2p_tol, rho_strict, vw_lim,
-                           B_lim, Ye_lenient);
-
   // Loop over the interior of the grid
   cctk_grid.loop_int_device<
       1, 1, 1>(grid.nghostzones, [=] CCTK_DEVICE(
                                      const PointDesc
                                          &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+    // Setting up atmosphere
+    CCTK_REAL rho_atm = 0.0;   // dummy initialization
+    CCTK_REAL press_atm = 0.0; // dummy initialization
+    CCTK_REAL eps_atm = 0.0;   // dummy initialization
+    CCTK_REAL radial_distance = sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+
+    // Grading rho
+    rho_atm = (radial_distance > r_atmo)
+                  ? (rho_abs_min * pow((r_atmo / radial_distance), n_rho_atmo))
+                  : rho_abs_min;
+    const CCTK_REAL rho_atmo_cut = rho_atm * (1 + atmo_tol);
+
+    // Grading pressure based on either cold or thermal EOS
+    if (thermal_eos_atmo) {
+      press_atm = (radial_distance > r_atmo)
+                      ? (p_atmo * pow(r_atmo / radial_distance, n_press_atmo))
+                      : p_atmo;
+      eps_atm = eos_th.eps_from_valid_rho_press_ye(rho_atm, press_atm, Ye_atmo);
+    } else {
+      const CCTK_REAL gm1 = eos_cold.gm1_from_valid_rmd(rho_atm);
+      eps_atm = eos_cold.sed_from_valid_gm1(gm1);
+      eps_atm = std::min(std::max(eos_th.rgeps.min, eps_atm), eos_th.rgeps.max);
+      press_atm = eos_th.press_from_valid_rho_eps_ye(rho_atm, eps_atm, Ye_atmo);
+    }
+    atmosphere atmo(rho_atm, eps_atm, Ye_atmo, press_atm, rho_atmo_cut);
+
+    // Construct Noble c2p object:
+    c2p_2DNoble c2p_Noble(eos_th, atmo, max_iter, c2p_tol, rho_strict, vw_lim,
+                          B_lim, Ye_lenient);
+
+    // Construct Palenzuela c2p object:
+    c2p_1DPalenzuela c2p_Pal(eos_th, atmo, max_iter, c2p_tol, rho_strict,
+                             vw_lim, B_lim, Ye_lenient);
+
     /* Get covariant metric */
     const smat<CCTK_REAL, 3> glo(
         [&](int i, int j) ARITH_INLINE { return calc_avg_v2c(gf_g(i, j), p); });
@@ -154,44 +171,6 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
       printf("Second C2P failed too :( :( \n");
       rep_second.debug_message();
       con2prim_flag(p.I) = 0;
-
-      // Debug, remove later
-      if (debug_mode) {
-        printf(
-            "WARNING: \n"
-            "C2Ps failed. Printing cons and saved prims before set to "
-            "atmo: \n"
-            "cctk_time"
-            "cctk_iteration = %i \n "
-            "x, y, z = %26.16e, %26.16e, %26.16e \n "
-            "dens = %26.16e \n tau = %26.16e \n momx = %26.16e \n "
-            "momy = %26.16e \n momz = %26.16e \n dBx = %26.16e \n "
-            "dBy = %26.16e \n dBz = %26.16e \n "
-            "saved_rho = %26.16e \n"
-            "pv.rho = %26.16e \n"
-            "saved_eps = %26.16e \n"
-            "pv.eps = %26.16e \n"
-            "pv.press = %26.16e \n"
-            "saved_velx = %26.16e \n"
-            "pv.velx = %26.16e \n"
-            "saved_vely = %26.16e \n"
-            "pv.vely = %26.16e \n"
-            "saved_velz = %26.16e \n "
-            "pv.velz = %26.16e \n"
-            "pv.Bvecx = %26.16e \n pv.Bvecy = %26.16e \n "
-            "pv.Bvecz = %26.16e \n "
-            "Avec_x = %26.16e \n Avec_y = %26.16e \n Avec_z = %26.16e \n ",
-            cctk_iteration, p.x, p.y, p.z, dens(p.I), tau(p.I), momx(p.I),
-            momy(p.I), momz(p.I), dBx(p.I), dBy(p.I), dBz(p.I), saved_rho(p.I), pv.rho,saved_eps(p.I),pv.eps,pv.press,
-            saved_velx(p.I),pv.vel(0),saved_vely(p.I),pv.vel(1),saved_velz(p.I),pv.vel(2),pv.Bvec(0), pv.Bvec(1),
-            pv.Bvec(2),
-            // rho(p.I), eps(p.I), press(p.I), velx(p.I), vely(p.I),
-            // velz(p.I), Bvecx(p.I), Bvecy(p.I), Bvecz(p.I),
-            Avec_x(p.I), Avec_y(p.I), Avec_z(p.I));
-        printf("  wlor  = %16.16e \n", wlor);
-        assert(0);
-      }
-
     }
 
     if (rep_first.set_atmo && rep_second.set_atmo) {
@@ -237,46 +216,16 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
     CCTK_REAL Ex, Ey, Ez;
 
     // Write back pv
-//    pv.scatter(rho(p.I), eps(p.I), dummy_Ye, press(p.I), velx(p.I), vely(p.I),
-//               velz(p.I), wlor, Bvecx(p.I), Bvecy(p.I), Bvecz(p.I), Ex, Ey, Ez);
-
-//  Add some limits as security, ideally the EOS and C2P should
-//  take care of that
-
-    if (pv.rho < rho_abs_min) {
-      pv.rho = rho_abs_min;
-    }
-
-    if (pv.eps < 0.) {
-      printf("cctk_iteration = %i,  ijk = %i, %i, %i, "
-              "x, y, z = %16.8e, %16.8e, %16.8e.\n",
-              cctk_iteration, p.i, p.j, p.k, p.x, p.y, p.z);
-      printf("  wlor  = %16.16e \n", wlor);
-      printf("  press  = %16.16e \n", pv.press);
-      printf("  eps  = %16.16e \n", pv.eps);
-      printf("  v_up   = %16.16e, %16.16e, %16.16e \n", pv.vel(0), pv.vel(1), pv.vel(2));
-      assert(0);
-      pv.eps = eps_min;
-      pv.press = eos_th.press_from_valid_rho_eps_ye(pv.rho,pv.eps,pv.Ye);
-    }
-
     pv.scatter(rho(p.I), eps(p.I), dummy_Ye, press(p.I), velx(p.I), vely(p.I),
                velz(p.I), wlor, Bvecx(p.I), Bvecy(p.I), Bvecz(p.I), Ex, Ey, Ez);
+
     zvec_x(p.I) = wlor * pv.vel(0); 
     zvec_y(p.I) = wlor * pv.vel(1);
     zvec_z(p.I) = wlor * pv.vel(2);
 
-    // For debugging, remove later
-    if (isinf(wlor) || isinf(eps(p.I)) || isinf(press(p.I))) {
-        printf("cctk_iteration = %i,  ijk = %i, %i, %i, "
-              "x, y, z = %16.8e, %16.8e, %16.8e.\n",
-              cctk_iteration, p.i, p.j, p.k, p.x, p.y, p.z);
-        printf("  wlor  = %16.16e \n", wlor);
-        printf("  press  = %16.16e \n", pv.press);
-        printf("  eps  = %16.16e \n", pv.eps);
-        printf("  v_up   = %16.16e, %16.16e, %16.16e \n", pv.vel(0), pv.vel(1), pv.vel(2));
-        assert(0);
-    };
+    svec_x(p.I) = (pv.rho+pv.rho*pv.eps+pv.press)*wlor*wlor*pv.vel(0); 
+    svec_y(p.I) = (pv.rho+pv.rho*pv.eps+pv.press)*wlor*wlor*pv.vel(1);
+    svec_z(p.I) = (pv.rho+pv.rho*pv.eps+pv.press)*wlor*wlor*pv.vel(2);
 
     // Write back cv
     cv.scatter(dens(p.I), momx(p.I), momy(p.I), momz(p.I), tau(p.I), dummy_Ye,

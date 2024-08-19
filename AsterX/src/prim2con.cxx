@@ -61,6 +61,10 @@ extern "C" void AsterX_Prim2Con_Initial(CCTK_ARGUMENTS) {
 	zvec_y(p.I) = wlor * pv.vel(1);
 	zvec_z(p.I) = wlor * pv.vel(2);
 
+	svec_x(p.I) = (pv.rho+pv.rho*pv.eps+pv.press)*wlor*wlor*pv.vel(0);
+	svec_y(p.I) = (pv.rho+pv.rho*pv.eps+pv.press)*wlor*wlor*pv.vel(1);
+	svec_z(p.I) = (pv.rho+pv.rho*pv.eps+pv.press)*wlor*wlor*pv.vel(2);
+
         // Update auxiliary fields
         // Compute contravariant metric first
         const CCTK_REAL detg = calc_det(g);

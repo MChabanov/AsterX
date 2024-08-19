@@ -25,6 +25,7 @@ using namespace ReconX;
 
 enum class flux_t { LxF, HLLE };
 enum class eos_t { IdealGas, Hybrid, Tabulated };
+enum class rec_var_t { v_vec, z_vec, s_vec };
 
 // Calculate the fluxes in direction `dir`. This function is more
 // complex because it has to handle any direction, but as reward,
@@ -46,11 +47,31 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType &eos_th) {
   /* grid functions */
   const vec<GF3D2<const CCTK_REAL>, dim> gf_vels{velx, vely, velz};
   const vec<GF3D2<const CCTK_REAL>, dim> gf_zvec{zvec_x, zvec_y, zvec_z};
+  const vec<GF3D2<const CCTK_REAL>, dim> gf_svec{svec_x, svec_y, svec_z};
   const vec<GF3D2<const CCTK_REAL>, dim> gf_Bvecs{Bvecx, Bvecy, Bvecz};
+  const vec<GF3D2<const CCTK_REAL>, dim> gf_dBstags{dBx_stag, dBy_stag, dBz_stag};
   const vec<GF3D2<const CCTK_REAL>, dim> gf_beta{betax, betay, betaz};
   const smat<GF3D2<const CCTK_REAL>, dim> gf_g{gxx, gxy, gxz, gyy, gyz, gzz};
+  /* grid functions for Upwind CT */
+  const vec<GF3D2<CCTK_REAL>, dim> vtildes_one{vtilde_y_xface, vtilde_z_yface,
+                                               vtilde_x_zface};
+  const vec<GF3D2<CCTK_REAL>, dim> vtildes_two{vtilde_z_xface, vtilde_x_yface,
+                                               vtilde_y_zface};
+  const vec<GF3D2<CCTK_REAL>, dim> amax{amax_xface, amax_yface, amax_zface};
+  const vec<GF3D2<CCTK_REAL>, dim> amin{amin_xface, amin_yface, amin_zface};
 
   static_assert(dir >= 0 && dir < 3, "");
+
+  rec_var_t rec_var;
+  if (CCTK_EQUALS(recon_type, "v_vec")) {
+    rec_var = rec_var_t::v_vec;
+  } else if (CCTK_EQUALS(recon_type, "z_vec")) {
+    rec_var = rec_var_t::z_vec;
+  } else if (CCTK_EQUALS(recon_type, "s_vec")) {
+    rec_var = rec_var_t::s_vec;
+  } else {
+    CCTK_ERROR("Unknown value for parameter \"recon_type\"");
+  }
 
   reconstruction_t reconstruction;
   if (CCTK_EQUALS(reconstruction_method, "Godunov"))
@@ -157,6 +178,10 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType &eos_th) {
   constexpr array<int, dim> face_centred = {!(dir == 0), !(dir == 1),
                                             !(dir == 2)};
 
+  constexpr array<int, dim> dir_arr = {(dir==0) ? 2 : ( (dir==1) ? 0 : 1 ), 
+                                       dir,
+                                       (dir==0) ? 1 : ( (dir==1) ? 2 : 0 )};
+
   grid.loop_int_device<
       face_centred[0], face_centred[1],
       face_centred
@@ -190,22 +215,6 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType &eos_th) {
       rho_rc(1) = rho_abs_min;
     }
 
-    const vec<vec<CCTK_REAL, 2>, 3> zvec_rc([&](int i) ARITH_INLINE {
-      return vec<CCTK_REAL, 2>{reconstruct_pt(gf_zvec(i), p, false, false)};
-    });
-    const vec<vec<CCTK_REAL, 2>, 3> zveclow_rc = calc_contraction(g_avg, zvec_rc);
-
-    /* Lorentz factor: W = 1 / sqrt(1 - v^2) */
-    const vec<CCTK_REAL, 2> w_lorentz_rc([&](int i) ARITH_INLINE {
-      return sqrt(1 + calc_contraction(zveclow_rc, zvec_rc)(i));
-    });
-
-    const vec<vec<CCTK_REAL, 2>, 3> vels_rc([&](int j) ARITH_INLINE {
-      return vec<CCTK_REAL, 2>([&](int f) ARITH_INLINE {
-         return zvec_rc(j)(f)/w_lorentz_rc(f);
-      }); 
-    });
-
     vec<CCTK_REAL, 2> press_rc{reconstruct_pt(press, p, false, true)};
     // TODO: Correctly reconstruct Ye
     const vec<CCTK_REAL, 2> ye_rc{ye_min, ye_max};
@@ -221,30 +230,100 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType &eos_th) {
           eos_th.press_from_valid_rho_eps_ye(rho_rc(1), eps_min, ye_rc(1));
     }
 
-    // Introduce reconstructed dBs
-    // Use staggered dB for i == dir
+    const vec<CCTK_REAL, 2> eps_rc([&](int f) ARITH_INLINE {
+      return eos_th.eps_from_valid_rho_press_ye(rho_rc(f), press_rc(f),
+                                                ye_rc(f));
+    });
 
-    vec<vec<CCTK_REAL, 2>, 3> Bs_rc([&](int i) ARITH_INLINE {
-      return vec<CCTK_REAL, 2>{reconstruct_pt(gf_Bvecs(i), p, false, false)};
+    const vec<CCTK_REAL, 2> rhoh_rc([&](int f) ARITH_INLINE {
+      return rho_rc(f) + rho_rc(f)*eps_rc(f) + press_rc(f);
     });
     
-    if (dir==0) {
-      Bs_rc(dir)(0) = dBx_stag(p.I)/sqrtg;
-    } else if (dir==1) {
-      Bs_rc(dir)(0) = dBy_stag(p.I)/sqrtg;
-    } else if (dir==2) {
-      Bs_rc(dir)(0) = dBz_stag(p.I)/sqrtg;
-    } else {
-      printf("This shouldn't happen.");
-      assert(0);
-    }
+    // Introduce reconstructed Bs
+    // Use staggered dB for i == dir
 
+    vec<vec<CCTK_REAL, 2>, 3> Bs_rc;
+    array<CCTK_REAL,2> Bs_rc_dummy; // note: can't copy array<,2> to vec<,2>, only construct
+
+    Bs_rc(dir)(0) = gf_dBstags(dir)(p.I)/sqrtg;
     Bs_rc(dir)(1) = Bs_rc(dir)(0);
 
-    // End of setting dBs
+    Bs_rc_dummy = reconstruct_pt(gf_Bvecs(dir_arr[0]), p, false, false);
+    Bs_rc(dir_arr[0])(0) = Bs_rc_dummy[0];
+    Bs_rc(dir_arr[0])(1) = Bs_rc_dummy[1];
 
-    /* co-velocity measured by Eulerian observer: v_j */
-    const vec<vec<CCTK_REAL, 2>, 3> vlows_rc = calc_contraction(g_avg, vels_rc);
+    Bs_rc_dummy = reconstruct_pt(gf_Bvecs(dir_arr[2]), p, false, false);
+    Bs_rc(dir_arr[2])(0) = Bs_rc_dummy[0];
+    Bs_rc(dir_arr[2])(1) = Bs_rc_dummy[1];
+
+    // End of setting Bs
+
+    vec<vec<CCTK_REAL, 2>, 3> vels_rc;
+    vec<vec<CCTK_REAL, 2>, 3> vlows_rc;
+    vec<CCTK_REAL, 2> w_lorentz_rc;
+    array<CCTK_REAL,2> vels_rc_dummy; // note: can't copy array<,2> to vec<,2>, only construct
+    switch (rec_var) {
+    case rec_var_t::v_vec : {
+
+      for(int i = 0; i <= 2; ++i) { // loop over components
+	      vels_rc_dummy = reconstruct_pt(gf_vels(i), p, false, false);
+	      vels_rc(i)(0) = vels_rc_dummy[0];
+	      vels_rc(i)(1) = vels_rc_dummy[1];
+      }
+
+      /* co-velocity measured by Eulerian observer: v_j */
+      vlows_rc = calc_contraction(g_avg, vels_rc);
+
+      /* Lorentz factor: W = 1 / sqrt(1 - v^2) */
+      w_lorentz_rc(0) = 1 / sqrt(1 - calc_contraction(vlows_rc, vels_rc)(0));
+      w_lorentz_rc(1) = 1 / sqrt(1 - calc_contraction(vlows_rc, vels_rc)(1));
+      break;
+
+    };
+    case rec_var_t::z_vec : {
+    
+      const vec<vec<CCTK_REAL, 2>, 3> zvec_rc([&](int i) ARITH_INLINE {
+         return vec<CCTK_REAL, 2>{reconstruct_pt(gf_zvec(i), p, false, false)};
+      });
+
+      const vec<vec<CCTK_REAL, 2>, 3> zveclow_rc = calc_contraction(g_avg, zvec_rc);
+
+      w_lorentz_rc(0) = sqrt(1 + calc_contraction(zveclow_rc, zvec_rc)(0));
+      w_lorentz_rc(1) = sqrt(1 + calc_contraction(zveclow_rc, zvec_rc)(1));
+
+      for(int i = 0; i <= 2; ++i) { // loop over components
+	      for(int j = 0; j <= 1; ++j) { // loop over left and right state
+		      vels_rc(i)(j) = zvec_rc(i)(j)/w_lorentz_rc(j);
+		      vlows_rc(i)(j) = zveclow_rc(i)(j)/w_lorentz_rc(j);
+	       }
+      }
+      break;
+
+    };
+    case rec_var_t::s_vec : {
+
+      const vec<vec<CCTK_REAL, 2>, 3> svec_rc([&](int i) ARITH_INLINE {
+         return vec<CCTK_REAL, 2>{reconstruct_pt(gf_svec(i), p, false, false)};
+      });
+
+      const vec<vec<CCTK_REAL, 2>, 3> sveclow_rc = calc_contraction(g_avg, svec_rc);
+
+      w_lorentz_rc(0) = sqrt(0.5+sqrt(0.25+calc_contraction(sveclow_rc, svec_rc)(0)/rhoh_rc(0)/rhoh_rc(0)));
+      w_lorentz_rc(1) = sqrt(0.5+sqrt(0.25+calc_contraction(sveclow_rc, svec_rc)(1)/rhoh_rc(1)/rhoh_rc(1)));
+
+      //printf("  wlor = %16.8e, %16.8e\n", w_lorentz_rc(0), w_lorentz_rc(1));
+
+      for(int i = 0; i <= 2; ++i) { // loop over components
+	      for(int j = 0; j <= 1; ++j) { // loop over left and right state
+		      vels_rc(i)(j) = svec_rc(i)(j)/w_lorentz_rc(j)/w_lorentz_rc(j)/rhoh_rc(j);
+		      vlows_rc(i)(j) = sveclow_rc(i)(j)/w_lorentz_rc(j)/w_lorentz_rc(j)/rhoh_rc(j);
+	       }
+      }
+      break;
+
+    };
+    }
+
     /* vtilde^i = alpha * v^i - beta^i */
     const vec<vec<CCTK_REAL, 2>, 3> vtildes_rc([&](int i) ARITH_INLINE {
       return vec<CCTK_REAL, 2>([&](int f) ARITH_INLINE {
@@ -283,11 +362,6 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType &eos_th) {
     // vars
 
     // Ideal gas case {
-    /* eps for ideal gas EOS */
-    const vec<CCTK_REAL, 2> eps_rc([&](int f) ARITH_INLINE {
-      return eos_th.eps_from_valid_rho_press_ye(rho_rc(f), press_rc(f),
-                                                ye_rc(f));
-    });
     /* cs2 for ideal gas EOS */
     const vec<CCTK_REAL, 2> cs2_rc([&](int f) ARITH_INLINE {
       return eos_th.csnd_from_valid_rho_eps_ye(rho_rc(f), eps_rc(f), ye_rc(f)) *
@@ -394,24 +468,6 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType &eos_th) {
     fluxBzs(dir)(p.I) =
         (dir != 2) * calcflux(lambda, Btildes_rc(2), flux_Btildes(2));
 
-    /*
-    if (isinf(eps(p.I + 2*p.DI[dir]))) {
-      printf("  rho = %16.8e, %16.8e, %16.8e, %16.8e, %16.8e, %16.8e;\n",
-             rho(p.I - p.DI[dir] * 3), rho(p.I - p.DI[dir] * 2),
-             rho(p.I - p.DI[dir]), rho(p.I), rho(p.I + p.DI[dir]),
-             rho(p.I + p.DI[dir] * 2));
-      printf("  press = %16.8e, %16.8e, %16.8e, %16.8e, %16.8e, %16.8e;\n",
-             press(p.I - p.DI[dir] * 3), press(p.I - p.DI[dir] * 2),
-             press(p.I - p.DI[dir]), press(p.I), press(p.I + p.DI[dir]),
-             press(p.I + p.DI[dir] * 2));
-      printf("  eps   = %16.8e, %16.8e, %16.8e, %16.8e, %16.8e, %16.8e;\n",
-             eps(p.I - p.DI[dir] * 3), eps(p.I - p.DI[dir] * 2),
-             eps(p.I - p.DI[dir]), eps(p.I), eps(p.I + p.DI[dir]),
-             eps(p.I + p.DI[dir] * 2));
-      assert(0);
-    }
-    */
-
     if (isnan(dens_rc(0)) || isnan(dens_rc(1)) || isnan(moms_rc(0)(0)) ||
         isnan(moms_rc(0)(1)) || isnan(moms_rc(1)(0)) || isnan(moms_rc(1)(1)) ||
         isnan(moms_rc(2)(0)) || isnan(moms_rc(2)(1)) || isnan(tau_rc(0)) ||
@@ -497,6 +553,31 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType &eos_th) {
       printf("  vtilde_rc = %16.8e, %16.8e.\n", vtilde_rc(0), vtilde_rc(1));
       assert(0);
     }
+
+    /* Begin code for upwindCT */
+        // if dir==0: dir1=1, dir2=2 | dir==1: dir1=2, dir2=0 | dir==2; dir1=0,
+        // dir2=1
+
+        const int dir1 = (dir == 0) ? 1 : ((dir == 1) ? 2 : 0);
+        const int dir2 = (dir == 0) ? 2 : ((dir == 1) ? 0 : 1);
+
+        amax(dir)(p.I) = max({CCTK_REAL(0), lambda(0)(0), lambda(0)(1),
+                              lambda(0)(2), lambda(0)(3), lambda(1)(0),
+                              lambda(1)(1), lambda(1)(2), lambda(1)(3)});
+
+        amin(dir)(p.I) = -1 * (min({CCTK_REAL(0), lambda(0)(0), lambda(0)(1),
+                                    lambda(0)(2), lambda(0)(3), lambda(1)(0),
+                                    lambda(1)(1), lambda(1)(2), lambda(1)(3)}));
+
+        vtildes_one(dir)(p.I) = (amax(dir)(p.I) * vtildes_rc(dir1)(0) +
+                                 amin(dir)(p.I) * vtildes_rc(dir1)(1)) /
+                                (amax(dir)(p.I) + amin(dir)(p.I));
+        vtildes_two(dir)(p.I) = (amax(dir)(p.I) * vtildes_rc(dir2)(0) +
+                                 amin(dir)(p.I) * vtildes_rc(dir2)(1)) /
+                                (amax(dir)(p.I) + amin(dir)(p.I));
+
+        /* End code for upwindCT */
+
   });
 }
 

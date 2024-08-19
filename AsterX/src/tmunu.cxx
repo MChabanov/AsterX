@@ -31,8 +31,10 @@ template <int interp_order> void Tmunu(CCTK_ARGUMENTS) {
    *
    */
 
+  const bool use_v_vec = CCTK_EQUALS(recon_type, "v_vec");
+
   /* grid functions */
-  //const vec<GF3D2<const CCTK_REAL>, dim> gf_vels{velx, vely, velz};
+  const vec<GF3D2<const CCTK_REAL>, dim> gf_vels{velx, vely, velz};
   const vec<GF3D2<const CCTK_REAL>, dim> gf_zvecs{zvec_x, zvec_y, zvec_z};
   const vec<GF3D2<const CCTK_REAL>, dim> gf_Bvecs{Bvecx, Bvecy, Bvecz};
 
@@ -44,15 +46,10 @@ template <int interp_order> void Tmunu(CCTK_ARGUMENTS) {
         /* Interpolating mhd quantities to vertices */
 
         const CCTK_REAL rho_avg = calc_avg_c2v<interp_order>(rho, p);
-        //const vec<CCTK_REAL, 3> vup_avg([&](int i) ARITH_INLINE {
-        //  return calc_avg_c2v<interp_order>(gf_vels(i), p);
-        //});
-        const vec<CCTK_REAL, 3> zup_avg([&](int i) ARITH_INLINE {
-          return calc_avg_c2v<interp_order>(gf_zvecs(i), p);
-        });
         const CCTK_REAL eps_avg = calc_avg_c2v<interp_order>(eps, p);
         const CCTK_REAL press_avg = calc_avg_c2v<interp_order>(press, p);
-        const vec<CCTK_REAL, 3> Bup_avg([&](int i) ARITH_INLINE {
+
+	const vec<CCTK_REAL, 3> Bup_avg([&](int i) ARITH_INLINE {
           return calc_avg_c2v<interp_order>(gf_Bvecs(i), p);
         });
 
@@ -60,21 +57,42 @@ template <int interp_order> void Tmunu(CCTK_ARGUMENTS) {
                                        gyy(p.I), gyz(p.I), gzz(p.I)};
         const vec<CCTK_REAL, 3> beta_up{betax(p.I), betay(p.I), betaz(p.I)};
 
-        /* Computing vlow */
-        //const vec<CCTK_REAL, 3> vlow_avg = calc_contraction(g_low, vup_avg);
-
-        /* Computing zlow */
-        const vec<CCTK_REAL, 3> zlow_avg = calc_contraction(g_low, zup_avg);
-
         /* Computing betalow */
         const vec<CCTK_REAL, 3> beta_low = calc_contraction(g_low, beta_up);
 
         /* Computing beta_sq */
         const CCTK_REAL beta_sq = calc_contraction(beta_low, beta_up);
 
-        /* Computing Lorentz factor */
-        //const CCTK_REAL w_lor = calc_wlorentz(vup_avg, vlow_avg);
-        const CCTK_REAL w_lor = calc_wlorentz_zvec(zup_avg, zlow_avg);
+        /* Compute velocity */
+        vec<CCTK_REAL, 3> vup_avg;
+        vec<CCTK_REAL, 3> vlow_avg;
+        CCTK_REAL w_lor;
+	if (use_v_vec) {
+
+	   vup_avg(0) = calc_avg_c2v<interp_order>(gf_vels(0), p);
+	   vup_avg(1) = calc_avg_c2v<interp_order>(gf_vels(1), p);
+	   vup_avg(2) = calc_avg_c2v<interp_order>(gf_vels(2), p);
+
+           /* Computing vlow */
+           vlow_avg = calc_contraction(g_low, vup_avg);
+
+           /* Computing Lorentz factor */
+           w_lor = calc_wlorentz(vup_avg, vlow_avg);
+
+	} else {
+
+	   const vec<CCTK_REAL, 3> zup_avg([&](int i) ARITH_INLINE {
+                 return calc_avg_c2v<interp_order>(gf_zvecs(i), p);
+           });
+
+           /* Computing zlow */
+           const vec<CCTK_REAL, 3> zlow_avg = calc_contraction(g_low, zup_avg);
+           
+	   w_lor = calc_wlorentz_zvec(zup_avg, zlow_avg);
+	   vup_avg  = zup_avg/w_lor;
+	   vlow_avg = zlow_avg/w_lor;
+
+	}
 
         /* Computing [ \rho(1+\epsilon) + Pgas ]*W^2 = \rho * h * W^2 */
         const CCTK_REAL rhoenthalpyW2 =
@@ -82,24 +100,18 @@ template <int interp_order> void Tmunu(CCTK_ARGUMENTS) {
 
         /* Computing lower components of 4-velocity (without the Lorentz factor)
          */
-        //const CCTK_REAL ut_low =
-        //    -alp(p.I) + calc_contraction(beta_low, vup_avg);
-        //const vec<CCTK_REAL, 3> ui_low = vlow_avg;
         const CCTK_REAL ut_low =
-            -alp(p.I) + calc_contraction(beta_low, zup_avg/w_lor);
-        const vec<CCTK_REAL, 3> ui_low = zlow_avg/w_lor;
+            -alp(p.I) + calc_contraction(beta_low, vup_avg);
+        const vec<CCTK_REAL, 3> ui_low = vlow_avg;
 
         /* Computing upper components of 4-velocity (without the Lorentz factor)
          */
         // utup = 1/alp(p.I); //not used
-        //const vec<CCTK_REAL, 3> ui_up = vup_avg - beta_up / alp(p.I);
-        const vec<CCTK_REAL, 3> ui_up = zup_avg/w_lor - beta_up / alp(p.I);
+        const vec<CCTK_REAL, 3> ui_up = vup_avg - beta_up / alp(p.I);
 
         /* Computing the upper 4 vector b of the magnetic field */
-        //const CCTK_REAL bst_up =
-        //    w_lor * (calc_contraction(Bup_avg, vlow_avg)) / alp(p.I);
         const CCTK_REAL bst_up =
-            (calc_contraction(Bup_avg, zlow_avg)) / alp(p.I);
+            w_lor * (calc_contraction(Bup_avg, vlow_avg)) / alp(p.I);
         const vec<CCTK_REAL, 3> bsi_up =
             (Bup_avg + alp(p.I) * bst_up * w_lor * ui_up) / w_lor;
 
