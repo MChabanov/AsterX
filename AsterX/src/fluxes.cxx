@@ -362,11 +362,6 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType &eos_th) {
     // vars
 
     // Ideal gas case {
-    /* eps for ideal gas EOS */
-    //const vec<CCTK_REAL, 2> eps_rc([&](int f) ARITH_INLINE {
-    //  return eos_th.eps_from_valid_rho_press_ye(rho_rc(f), press_rc(f),
-    //                                            ye_rc(f));
-    //});
     /* cs2 for ideal gas EOS */
     const vec<CCTK_REAL, 2> cs2_rc([&](int f) ARITH_INLINE {
       return eos_th.csnd_from_valid_rho_eps_ye(rho_rc(f), eps_rc(f), ye_rc(f)) *
@@ -472,24 +467,6 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType &eos_th) {
         (dir != 1) * calcflux(lambda, Btildes_rc(1), flux_Btildes(1));
     fluxBzs(dir)(p.I) =
         (dir != 2) * calcflux(lambda, Btildes_rc(2), flux_Btildes(2));
-
-    /*
-    if (isinf(eps(p.I + 2*p.DI[dir]))) {
-      printf("  rho = %16.8e, %16.8e, %16.8e, %16.8e, %16.8e, %16.8e;\n",
-             rho(p.I - p.DI[dir] * 3), rho(p.I - p.DI[dir] * 2),
-             rho(p.I - p.DI[dir]), rho(p.I), rho(p.I + p.DI[dir]),
-             rho(p.I + p.DI[dir] * 2));
-      printf("  press = %16.8e, %16.8e, %16.8e, %16.8e, %16.8e, %16.8e;\n",
-             press(p.I - p.DI[dir] * 3), press(p.I - p.DI[dir] * 2),
-             press(p.I - p.DI[dir]), press(p.I), press(p.I + p.DI[dir]),
-             press(p.I + p.DI[dir] * 2));
-      printf("  eps   = %16.8e, %16.8e, %16.8e, %16.8e, %16.8e, %16.8e;\n",
-             eps(p.I - p.DI[dir] * 3), eps(p.I - p.DI[dir] * 2),
-             eps(p.I - p.DI[dir]), eps(p.I), eps(p.I + p.DI[dir]),
-             eps(p.I + p.DI[dir] * 2));
-      assert(0);
-    }
-    */
 
     if (isnan(dens_rc(0)) || isnan(dens_rc(1)) || isnan(moms_rc(0)(0)) ||
         isnan(moms_rc(0)(1)) || isnan(moms_rc(1)(0)) || isnan(moms_rc(1)(1)) ||

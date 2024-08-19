@@ -171,44 +171,6 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
       printf("Second C2P failed too :( :( \n");
       rep_second.debug_message();
       con2prim_flag(p.I) = 0;
-
-      // Debug, remove later
-      if (debug_mode) {
-        printf(
-            "WARNING: \n"
-            "C2Ps failed. Printing cons and saved prims before set to "
-            "atmo: \n"
-            "cctk_time"
-            "cctk_iteration = %i \n "
-            "x, y, z = %26.16e, %26.16e, %26.16e \n "
-            "dens = %26.16e \n tau = %26.16e \n momx = %26.16e \n "
-            "momy = %26.16e \n momz = %26.16e \n dBx = %26.16e \n "
-            "dBy = %26.16e \n dBz = %26.16e \n "
-            "saved_rho = %26.16e \n"
-            "pv.rho = %26.16e \n"
-            "saved_eps = %26.16e \n"
-            "pv.eps = %26.16e \n"
-            "pv.press = %26.16e \n"
-            "saved_velx = %26.16e \n"
-            "pv.velx = %26.16e \n"
-            "saved_vely = %26.16e \n"
-            "pv.vely = %26.16e \n"
-            "saved_velz = %26.16e \n "
-            "pv.velz = %26.16e \n"
-            "pv.Bvecx = %26.16e \n pv.Bvecy = %26.16e \n "
-            "pv.Bvecz = %26.16e \n "
-            "Avec_x = %26.16e \n Avec_y = %26.16e \n Avec_z = %26.16e \n ",
-            cctk_iteration, p.x, p.y, p.z, dens(p.I), tau(p.I), momx(p.I),
-            momy(p.I), momz(p.I), dBx(p.I), dBy(p.I), dBz(p.I), saved_rho(p.I), pv.rho,saved_eps(p.I),pv.eps,pv.press,
-            saved_velx(p.I),pv.vel(0),saved_vely(p.I),pv.vel(1),saved_velz(p.I),pv.vel(2),pv.Bvec(0), pv.Bvec(1),
-            pv.Bvec(2),
-            // rho(p.I), eps(p.I), press(p.I), velx(p.I), vely(p.I),
-            // velz(p.I), Bvecx(p.I), Bvecy(p.I), Bvecz(p.I),
-            Avec_x(p.I), Avec_y(p.I), Avec_z(p.I));
-        printf("  wlor  = %16.16e \n", wlor);
-        assert(0);
-      }
-
     }
 
     if (rep_first.set_atmo && rep_second.set_atmo) {
@@ -254,29 +216,6 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
     CCTK_REAL Ex, Ey, Ez;
 
     // Write back pv
-//    pv.scatter(rho(p.I), eps(p.I), dummy_Ye, press(p.I), velx(p.I), vely(p.I),
-//               velz(p.I), wlor, Bvecx(p.I), Bvecy(p.I), Bvecz(p.I), Ex, Ey, Ez);
-
-//  Add some limits as security, ideally the EOS and C2P should
-//  take care of that
-
-//    if (pv.rho < rho_abs_min) {
-//      pv.rho = rho_abs_min;
-//    }
-
-    if (pv.eps < 0.) {
-      printf("cctk_iteration = %i,  ijk = %i, %i, %i, "
-              "x, y, z = %16.8e, %16.8e, %16.8e.\n",
-              cctk_iteration, p.i, p.j, p.k, p.x, p.y, p.z);
-      printf("  wlor  = %16.16e \n", wlor);
-      printf("  press  = %16.16e \n", pv.press);
-      printf("  eps  = %16.16e \n", pv.eps);
-      printf("  v_up   = %16.16e, %16.16e, %16.16e \n", pv.vel(0), pv.vel(1), pv.vel(2));
-      assert(0);
-      pv.eps = eps_min;
-      pv.press = eos_th.press_from_valid_rho_eps_ye(pv.rho,pv.eps,pv.Ye);
-    }
-
     pv.scatter(rho(p.I), eps(p.I), dummy_Ye, press(p.I), velx(p.I), vely(p.I),
                velz(p.I), wlor, Bvecx(p.I), Bvecy(p.I), Bvecz(p.I), Ex, Ey, Ez);
 
@@ -287,18 +226,6 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
     svec_x(p.I) = (pv.rho+pv.rho*pv.eps+pv.press)*wlor*wlor*pv.vel(0); 
     svec_y(p.I) = (pv.rho+pv.rho*pv.eps+pv.press)*wlor*wlor*pv.vel(1);
     svec_z(p.I) = (pv.rho+pv.rho*pv.eps+pv.press)*wlor*wlor*pv.vel(2);
-
-    // For debugging, remove later
-    if (isinf(wlor) || isinf(eps(p.I)) || isinf(press(p.I))) {
-        printf("cctk_iteration = %i,  ijk = %i, %i, %i, "
-              "x, y, z = %16.8e, %16.8e, %16.8e.\n",
-              cctk_iteration, p.i, p.j, p.k, p.x, p.y, p.z);
-        printf("  wlor  = %16.16e \n", wlor);
-        printf("  press  = %16.16e \n", pv.press);
-        printf("  eps  = %16.16e \n", pv.eps);
-        printf("  v_up   = %16.16e, %16.16e, %16.16e \n", pv.vel(0), pv.vel(1), pv.vel(2));
-        assert(0);
-    };
 
     // Write back cv
     cv.scatter(dens(p.I), momx(p.I), momy(p.I), momz(p.I), tau(p.I), dummy_Ye,

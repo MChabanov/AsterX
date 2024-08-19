@@ -3,7 +3,7 @@
 # Source files in this directory
 SRCS = \
   computeBfromA.cxx \
-  con2prim_rpa.cxx \
+  con2prim.cxx \
   estimate_error.cxx \
   fluxes.cxx \
   prim2con.cxx \

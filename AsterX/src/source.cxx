@@ -162,50 +162,6 @@ template <int FDORDER> void SourceTerms(CCTK_ARGUMENTS) {
         momzrhs(p.I) = alp_avg * sqrt_detg * mom_source(2);
         taurhs(p.I) = alp_avg * sqrt_detg * tau_source;
 
-        // Add some debugging lines
-
-        if (isnan(v_up(0)) || isnan(v_up(1)) || isnan(v_up(2)) ||
-            isnan(eps(p.I)) || isnan(rho(p.I)) || isnan(press(p.I)) ||
-            isnan(Bvecx(p.I)) || isnan(Bvecy(p.I)) || isnan(Bvecz(p.I)) ||
-            rho(p.I) < 0.0 || press(p.I) < 0.0 ||
-            eps(p.I) < 0.0 || isnan(momxrhs(p.I)) || isnan(momyrhs(p.I)) || isnan(momzrhs(p.I)) ||
-            isnan(taurhs(p.I)) || isnan(w_lorentz)) {
-      printf("cctk_iteration = %i, ijk = %i, %i, %i, "
-             "x, y, z = %16.16e, %16.16e, %16.16e.\n",
-             cctk_iteration, p.i, p.j, p.k, p.x, p.y, p.z);
-      printf("  momxrhs  = %16.16e \n", momxrhs(p.I));
-      printf("  momyrhs  = %16.16e \n", momyrhs(p.I));
-      printf("  momzrhs  = %16.16e \n", momzrhs(p.I));
-      printf("  taurhs  = %16.16e \n", taurhs(p.I));
-      printf("  wlor  = %16.16e \n", w_lorentz);
-      printf("  vupx  = %16.16e \n", v_up(0));
-      printf("  vupy  = %16.16e \n", v_up(1));
-      printf("  vupz  = %16.16e \n", v_up(2));
-      printf("  v_lowx  = %16.16e \n", v_low(0));
-      printf("  v_lowy  = %16.16e \n", v_low(1));
-      printf("  v_lowz  = %16.16e \n", v_low(2));
-      printf("  v*v     = %16.16e \n", calc_contraction(v_low, v_up));
-      printf("  rho  = %16.16e \n", rho(p.I));
-      printf("  press = %16.16e \n", press(p.I));
-      printf("  eps   = %16.16e \n", eps(p.I));
-      printf("  Bvecx  = %16.16e \n", Bvecx(p.I));
-      printf("  Bvecy  = %16.16e \n", Bvecy(p.I));
-      printf("  Bvecz  = %16.16e \n", Bvecz(p.I));
-      printf("  alp_avg  = %16.16e \n", alp_avg);
-      printf("  betax_avg  = %16.16e \n", beta_avg(0));
-      printf("  betay_avg  = %16.16e \n", beta_avg(1));
-      printf("  betaz_avg  = %16.16e \n", beta_avg(2));
-      printf("  gxx_avg = %16.16e \n", g_avg(0,0));
-      printf("  gxy_avg   = %16.16e \n",g_avg(0,1));
-      printf("  gxz_avg  = %16.16e \n", g_avg(0,2));
-      printf("  gyy_avg  = %16.16e \n", g_avg(1,1));
-      printf("  gyz_avg  = %16.16e \n", g_avg(1,2));
-      printf("  gzz_avg  = %16.16e \n", g_avg(2,2));
-      printf("  detg  = %16.16e \n", detg);
-      printf("  sqrt_detg  = %16.16e \n", sqrt_detg);     
-      assert(0);
-    }
-
       }); // end of loop over grid
 }
 
