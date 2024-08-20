@@ -83,10 +83,6 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
     sm_metric3 g(sm_symt3l(glo(0, 0), glo(0, 1), glo(1, 1), glo(0, 2),
                            glo(1, 2), glo(2, 2)));
 
-    /* Calculate inverse of 3-metric */
-    const CCTK_REAL spatial_detg = calc_det(glo);
-    const CCTK_REAL sqrt_detg = sqrt(spatial_detg);
-
     prim_vars_mhd pv;
     prim_vars_mhd pv_seeds{saved_rho(p.I),
                            saved_eps(p.I),
