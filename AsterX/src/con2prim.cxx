@@ -130,11 +130,11 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
     }
 
     // Modifying primitive seeds within BH interiors before C2Ps are called
-    // NOTE: By default, alp_thresh=0 so the if condition below is never
+    // NOTE: By default, Psi6_thresh=1.0e100 so the if condition below is never
     // triggered. One must be very careful when using this functionality and
-    // must correctly set alp_thresh, rho_BH, eps_BH and vwlim_BH in the parfile
+    // must correctly set Psi6_thresh, rho_BH, eps_BH and vwlim_BH in the parfile
 
-    if (alp(p.I) < alp_thresh) {
+    if (sqrt_detg > Psi6_thresh) {
       if ((pv_seeds.rho > rho_BH) || (pv_seeds.eps > eps_BH)) {
         pv_seeds.rho = rho_BH; // typically set to 0.01% to 1% of rho_max of
                                // initial NS or disk
@@ -197,11 +197,11 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
       rep_second.debug_message();
 
       // Treatment for BH interiors after C2P failures
-      // NOTE: By default, alp_thresh=0 so the if condition below is never
+      // NOTE: By default, Psi6_thresh=1.0e100 so the if condition below is never
       // triggered. One must be very careful when using this functionality and
-      // must correctly set alp_thresh, rho_BH, eps_BH and vwlim_BH in the
+      // must correctly set Psi6_thresh, rho_BH, eps_BH and vwlim_BH in the
       // parfile
-      if (alp(p.I) < alp_thresh) {
+      if (sqrt_detg > Psi6_thresh) {
         if ((pv_seeds.rho > rho_BH) || (pv_seeds.eps > eps_BH)) {
           pv.rho = rho_BH; // typically set to 0.01% to 1% of rho_max of initial
                            // NS or disk
