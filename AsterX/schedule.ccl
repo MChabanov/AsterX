@@ -30,7 +30,7 @@ if(local_estimate_error)
   {
     LANG: C
     READS: HydroBaseX::rho(everywhere) HydroBaseX::vel(everywhere) HydroBaseX::eps(everywhere) HydroBaseX::press(everywhere)
-    WRITES: CarpetX::regrid_error(interior)
+    WRITES: CarpetXRegrid::regrid_error(interior)
   } "Estimate local error for regridding initial conditions"
 }
 
