@@ -15,6 +15,35 @@ BOOLEAN use_uct "Shall we use the Upwind-CT method to compute the electric field
 {
 } "no"
 
+BOOLEAN fix_flow_insideBH "Put fixed solution for primitives for Psi6 > Psi6_thresh" STEERABLE=always
+{
+} "no"
+
+CCTK_REAL rho_fix_BH "" STEERABLE=always
+{
+ (0:* :: "should be positive"
+} 1.0e-5
+
+CCTK_REAL eps_fix_BH "" STEERABLE=always
+{
+ (0:* :: "should be positive"
+} 1.0e-10
+
+CCTK_REAL zr_fix_BH "" STEERABLE=always
+{
+ *:* :: "should be positive"
+} 0.0
+
+CCTK_REAL rad_ztheta_fix_BH "" STEERABLE=always
+{
+ *:* :: "should be positive"
+} 0.0
+
+CCTK_REAL rad_zphi_fix_BH "" STEERABLE=always
+{
+ *:* :: "should be positive"
+} 0.0
+
 KEYWORD flux_type "Flux solver" STEERABLE=always
 {
   "LxF" :: ""

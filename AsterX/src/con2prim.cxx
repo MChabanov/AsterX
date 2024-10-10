@@ -129,30 +129,52 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
       atmo.set(pv_seeds);
     }
 
-    // Modifying primitive seeds within BH interiors before C2Ps are called
+    // Modifying the solution within BH interiors before C2Ps are called
     // NOTE: By default, Psi6_thresh=1.0e100 so the if condition below is never
     // triggered. One must be very careful when using this functionality and
-    // must correctly set Psi6_thresh, rho_BH, eps_BH and vwlim_BH in the parfile
+    // must correctly set Psi6_thresh, rho_BH, eps_BH and z^i_BH in the parfile
 
-    if (sqrt_detg > Psi6_thresh) {
-      if ((pv_seeds.rho > rho_BH) || (pv_seeds.eps > eps_BH)) {
-        pv_seeds.rho = rho_BH; // typically set to 0.01% to 1% of rho_max of
-                               // initial NS or disk
-        pv_seeds.eps = eps_BH;
-        pv_seeds.Ye = Ye_atmo;
-        pv_seeds.press =
-            eos_th.press_from_valid_rho_eps_ye(rho_BH, eps_BH, Ye_atmo);
-        // check on velocities
-        CCTK_REAL wlim_BH = sqrt(1.0 + vwlim_BH * vwlim_BH);
-        CCTK_REAL vlim_BH = vwlim_BH / wlim_BH;
-        CCTK_REAL sol_v =
-            sqrt((pv_seeds.w_lor * pv_seeds.w_lor - 1.0)) / pv_seeds.w_lor;
-        if (sol_v > vlim_BH) {
-          pv_seeds.vel *= vlim_BH / sol_v;
-          pv_seeds.w_lor = wlim_BH;
-        }
-        cv.from_prim(pv_seeds, glo);
-      }
+    if (sqrt_detg > Psi6_thresh && fix_flow_insideBH) {
+
+      // Set thermodynamic variables
+      pv_seeds.rho = rho_fix_BH; // typically set to 0.01% to 1% of rho_max of
+                                 // initial NS or disk
+      pv_seeds.eps = eps_fix_BH;
+      pv_seeds.Ye = Ye_atmo;
+      pv_seeds.press =
+          eos_th.press_from_valid_rho_eps_ye(rho_fix_BH, eps_fix_BH, Ye_atmo);
+
+      // Coordinate transformation Spherical -> Cartesian
+      CCTK_REAL rr   = sqrt(p.x*p.x + p.y*p.y + p.z*p.z);
+      CCTK_REAL rcyl = sqrt(p.x*p.x + p.y*p.y);
+      CCTK_REAL costheta = p.z/rr;
+      CCTK_REAL sintheta = rcyl/rr;
+      CCTK_REAL cosphi = p.x/rcyl;
+      CCTK_REAL sinphi = p.y/rcyl;
+
+      // Note that rad_zphi_fix_BH = rr * z_fix_phi such that
+      // zr_fix_BH, rad_ztheta_fix_BH and rad_zphi_fix_BH have approx. 
+      // the same order of magnitude
+      CCTK_REAL zx_fix_BH = sintheta*cosphi*zr_fix_BH + 
+                            costheta*cosphi*rad_ztheta_fix_BH - 
+                            sintheta*sinphi*rad_zphi_fix_BH;
+
+      CCTK_REAL zy_fix_BH = sintheta*sinphi*zr_fix_BH + 
+                            costheta*sinphi*rad_ztheta_fix_BH + 
+                            sintheta*cosphi*rad_zphi_fix_BH;
+
+      CCTK_REAL zz_fix_BH = costheta*zr_fix_BH - sintheta*rad_ztheta_fix_BH;
+
+      vec<CCTK_REAL, 3> z_fix_BH{zx_fix_BH,zy_fix_BH,zz_fix_BH};
+      const vec<CCTK_REAL, 3> zlow_fix_BH = calc_contraction(glo, z_fix_BH);
+      CCTK_REAL w_fix_BH = calc_wlorentz_zvec(z_fix_BH,zlow_fix_BH);
+
+      pv_seeds.vel(0) = zx_fix_BH/w_fix_BH;
+      pv_seeds.vel(1) = zy_fix_BH/w_fix_BH;
+      pv_seeds.vel(2) = zz_fix_BH/w_fix_BH;
+
+      pv_seeds.w_lor = w_fix_BH;
+      cv.from_prim(pv_seeds, glo);
     }
 
     // Construct error report object:
@@ -195,34 +217,33 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
     if (rep_first.failed() && rep_second.failed()) {
       printf("Second C2P failed too :( :( \n");
       rep_second.debug_message();
-
-      // Treatment for BH interiors after C2P failures
-      // NOTE: By default, Psi6_thresh=1.0e100 so the if condition below is never
-      // triggered. One must be very careful when using this functionality and
-      // must correctly set Psi6_thresh, rho_BH, eps_BH and vwlim_BH in the
-      // parfile
-      if (sqrt_detg > Psi6_thresh) {
-        if ((pv_seeds.rho > rho_BH) || (pv_seeds.eps > eps_BH)) {
-          pv.rho = rho_BH; // typically set to 0.01% to 1% of rho_max of initial
-                           // NS or disk
-          pv.eps = eps_BH;
-          pv.Ye = Ye_atmo;
-          pv.press =
-              eos_th.press_from_valid_rho_eps_ye(rho_BH, eps_BH, Ye_atmo);
-          // check on velocities
-          CCTK_REAL wlim_BH = sqrt(1.0 + vwlim_BH * vwlim_BH);
-          CCTK_REAL vlim_BH = vwlim_BH / wlim_BH;
-          CCTK_REAL sol_v = sqrt((pv.w_lor * pv.w_lor - 1.0)) / pv.w_lor;
-          if (sol_v > vlim_BH) {
-            pv.vel *= vlim_BH / sol_v;
-            pv.w_lor = wlim_BH;
-          }
-          cv.from_prim(pv, glo);
-          rep_first.set_atmo = 0;
-          rep_second.set_atmo = 0;
-        }
-      }
       con2prim_flag(p.I) = 0;
+    } else {
+      /* set flag to success */
+      con2prim_flag(p.I) = 1;
+    }
+
+    // Limiting of BH interiors
+    // NOTE: By default, Psi6_thresh=1.0e100 so the if condition below is never
+    // triggered. One must be very careful when using this functionality and
+    // must correctly set Psi6_thresh, rho_BH, eps_BH and vwlim_BH in the
+    // parfile
+    if (sqrt_detg > Psi6_thresh) {
+      if (pv.rho > rho_BH) { pv.rho = rho_BH;}
+      if (pv.eps > eps_BH) { pv.eps = eps_BH;}
+      pv.press =
+          eos_th.press_from_valid_rho_eps_ye(pv.rho,pv.eps,Ye_atmo);
+      // Check on velocities
+      CCTK_REAL wlim_BH = sqrt(1.0 + vwlim_BH * vwlim_BH);
+      CCTK_REAL vlim_BH = vwlim_BH / wlim_BH;
+      CCTK_REAL sol_v = sqrt((pv.w_lor * pv.w_lor - 1.0)) / pv.w_lor;
+      if (sol_v > vlim_BH) {
+        pv.vel *= vlim_BH / sol_v;
+        pv.w_lor = wlim_BH;
+      }
+      cv.from_prim(pv, glo);
+      rep_first.set_atmo = 0;
+      rep_second.set_atmo = 0;
     }
 
     if (rep_first.set_atmo && rep_second.set_atmo) {
@@ -261,8 +282,6 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
       // assert(0);
     }
 
-    /* set flag to success */
-    con2prim_flag(p.I) = 1;
 
     // dummy vars
     CCTK_REAL Ex, Ey, Ez;
