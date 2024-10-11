@@ -89,6 +89,11 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
     sm_metric3 g(sm_symt3l(glo(0, 0), glo(0, 1), glo(1, 1), glo(0, 2),
                            glo(1, 2), glo(2, 2)));
 
+    // Compute contravariant metric first
+    const CCTK_REAL detg = calc_det(glo);
+    const CCTK_REAL sqrt_detg = sqrt(detg);
+    const smat<CCTK_REAL, 3> g_inv = calc_inv(glo, detg);
+
     prim_vars_mhd pv;
 
     // pv_seeds is just used for recomputing conservatives
@@ -110,11 +115,6 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
     // Impose limits on conservative variables
     // Based on Appendix A of https://arxiv.org/pdf/1112.0568
     // --------------------------------------------------------------------
-
-    // Compute contravariant metric first
-    const CCTK_REAL detg = calc_det(glo);
-    const CCTK_REAL sqrt_detg = sqrt(detg);
-    const smat<CCTK_REAL, 3> g_inv = calc_inv(glo, detg);
 
     // Conservative variables
     const CCTK_REAL tauL = tau(p.I);
