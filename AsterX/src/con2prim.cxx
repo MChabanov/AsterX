@@ -232,7 +232,7 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
       if (pv.rho > rho_BH) { pv.rho = rho_BH;}
       if (pv.eps > eps_BH) { pv.eps = eps_BH;}
       pv.press =
-          eos_th.press_from_valid_rho_eps_ye(pv.rho,pv.eps,Ye_atmo);
+          eos_th.press_from_valid_rho_eps_ye(pv.rho,pv.eps,pv.Ye);
       // Check on velocities
       CCTK_REAL wlim_BH = sqrt(1.0 + vwlim_BH * vwlim_BH);
       CCTK_REAL vlim_BH = vwlim_BH / wlim_BH;
