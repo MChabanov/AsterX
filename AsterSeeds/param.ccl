@@ -19,7 +19,6 @@ KEYWORD test_case "Name of the testcase" STEERABLE=never
   "Balsara2"                 :: ""
   "Balsara3"                 :: ""
   "Balsara4"                 :: ""
-  "Balsara4_hd"              :: ""
   "Balsara5"                 :: ""
 
   "cylindrical blast"        :: ""
