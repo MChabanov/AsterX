@@ -159,6 +159,7 @@ USES CCTK_REAL Psi6_thresh
 USES CCTK_REAL rho_BH
 USES CCTK_REAL eps_BH
 USES CCTK_REAL vwlim_BH
+USES BOOLEAN use_z
 
 SHARES: ReconX
 USES KEYWORD reconstruction_method

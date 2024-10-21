@@ -12,6 +12,19 @@ if (CCTK_Equals(test_type, "Atmosphere")) {
   "Set up initial conditions for atmosphere"
 }
 
+#Initial conditions for BBH Cloud ID
+
+if (CCTK_Equals(test_type, "BBHCloud")) {
+
+  SCHEDULE BBHCloud_Initialize IN HydroBaseX_InitialData AFTER HydroBaseX_initial_data {
+  LANG: C
+  READS: ADMBaseX::metric(everywhere)
+  WRITES: HydroBaseX::rho(everywhere) HydroBaseX::vel(everywhere) HydroBaseX::eps(everywhere) HydroBaseX::press(everywhere)
+  WRITES: AsterX::Avec_x(everywhere) AsterX::Avec_y(everywhere) AsterX::Avec_z(everywhere)
+  }
+  "Set up initial conditions for atmosphere"
+}
+
 #Initial conditions for 1D tests
 
 if (CCTK_Equals(test_type, "1DTest")) {

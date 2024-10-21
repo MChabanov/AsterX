@@ -91,11 +91,11 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType &eos_cold,
 
     // Construct Noble c2p object:
     c2p_2DNoble c2p_Noble(eos_th, atmo, max_iter, c2p_tol, rho_strict, vw_lim,
-                          B_lim, Ye_lenient);
+                          B_lim, Ye_lenient, use_z);
 
     // Construct Palenzuela c2p object:
     c2p_1DPalenzuela c2p_Pal(eos_th, atmo, max_iter, c2p_tol, rho_strict,
-                             vw_lim, B_lim, Ye_lenient);
+                             vw_lim, B_lim, Ye_lenient, use_z);
 
     /* Get covariant metric */
     const smat<CCTK_REAL, 3> glo(

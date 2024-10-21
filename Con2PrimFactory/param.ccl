@@ -113,3 +113,9 @@ CCTK_REAL vwlim_BH " Maximum zvec (v*w) allowed in regions where Psi6>Psi6_thres
 {
   0.0:* :: ""
 } 1.0e100
+
+# Experimental parameter to use z instead of v to avoid v > 1
+
+BOOLEAN use_z "" STEERABLE=ALWAYS
+{
+}  "no"

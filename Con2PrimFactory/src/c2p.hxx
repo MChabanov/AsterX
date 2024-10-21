@@ -46,6 +46,7 @@ protected:
   CCTK_REAL vw_lim;
   CCTK_REAL Bsq_lim;
   atmosphere atmo;
+  bool use_zprim;
 
   CCTK_HOST CCTK_DEVICE CCTK_ATTRIBUTE_ALWAYS_INLINE inline CCTK_REAL
       get_Ssq_Exact(vec<CCTK_REAL, 3> &mom,
