@@ -33,8 +33,8 @@ extern "C" void Con2PrimFactory_Test(CCTK_ARGUMENTS) {
                              1.0, 0.0, 1.0}; // xx, xy, xz, yy, yz, zz
 
   // Con2Prim objects
-  c2p_2DNoble c2p_Noble(eos_th, atmo, 100, 1e-8, 1e8, 1, 1, true);
-  c2p_1DPalenzuela c2p_Pal(eos_th, atmo, 100, 1e-8, 1e8, 1, 1, true);
+  c2p_2DNoble c2p_Noble(eos_th, atmo, 100, 1e-8, 1e8, 1, 1, true, false);
+  c2p_1DPalenzuela c2p_Pal(eos_th, atmo, 100, 1e-8, 1e8, 1, 1, true, false);
 
   // Construct error report object:
   c2p_report rep_Noble;
