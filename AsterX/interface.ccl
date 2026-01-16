@@ -36,6 +36,12 @@ CCTK_REAL DYe TYPE=gf CENTERING={ccc} TAGS='rhs="DYe_rhs" dependents="HydroBaseX
 # the "evolved" quantities. 
 CCTK_REAL DEnt TYPE=gf CENTERING={ccc} TAGS='rhs="DEntrhs" dependents="HydroBaseX::entropy AsterX::flux_x AsterX::flux_y AsterX::flux_z"' "Advected entropy density"
 
+# Cell-centered point values of the conservatives
+CCTK_REAL cons_vector_pv TYPE=gf CENTERING={ccc} TAGS='checkpoint="no"' "Cell-centered point values of the conservatives"
+{
+  dens_pv, momx_pv, momy_pv, momz_pv, tau_pv, DYe_pv, DEnt_pv
+} "Conserved density, momenta, internal energy, electron fraction and entropy"
+
 CCTK_REAL flux_x TYPE=gf CENTERING={vcc} TAGS='checkpoint="no"'
 {
   fxdens

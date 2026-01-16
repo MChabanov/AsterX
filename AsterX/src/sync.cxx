@@ -110,4 +110,10 @@ extern "C" void AsterX_CommdB(CCTK_ARGUMENTS) {
   SyncGroupsByDirIGhostOnly(cctkGH, groups.size(), groups.data(), nullptr);
 }
 
+extern "C" void AsterX_CommConsPV(CCTK_ARGUMENTS) {
+  static const std::vector<int> groups = {CCTK_GroupIndex("AsterX::cons_vector_pv")};
+
+  SyncGroupsByDirIGhostOnly(cctkGH, groups.size(), groups.data(), nullptr);
+}
+
 } // namespace AsterX

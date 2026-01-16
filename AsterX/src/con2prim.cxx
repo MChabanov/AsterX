@@ -194,10 +194,23 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType *eos_1p,
     // CCTK_REAL wlor = calc_wlorentz(v_low, v_up);
     CCTK_REAL wlor = sqrt(1.0 + zsq);
 
-    // Note that cv are densitized, i.e. they all include sqrt_detg
-    cons_vars cv{dens(p.I), {momx(p.I), momy(p.I), momz(p.I)},
-                 tau(p.I),  DYe(p.I),
-                 DEnt(p.I), {dBx(p.I), dBy(p.I), dBz(p.I)}};
+    // We don't write back conservatives for the FV HO case
+    // See code inside next if condition
+    bool write_back_cons = true;
+    cons_vars cv;
+
+    if (use_ho_fv) {
+      write_back_cons = false;
+      // Note that cv are densitized, i.e. they all include sqrt_detg
+      cv = cons_vars{dens_pv(p.I), {momx_pv(p.I), momy_pv(p.I), momz_pv(p.I)},
+                     tau_pv(p.I),  DYe_pv(p.I),
+                     DEnt_pv(p.I), {dBx(p.I), dBy(p.I), dBz(p.I)}};
+    } else {
+      // Note that cv are densitized, i.e. they all include sqrt_detg
+      cv = cons_vars{dens(p.I), {momx(p.I), momy(p.I), momz(p.I)},
+                     tau(p.I),  DYe(p.I),
+                     DEnt(p.I), {dBx(p.I), dBy(p.I), dBz(p.I)}};
+    }
 
     // Undensitized magnetic fields
     const vec<CCTK_REAL, 3> Bup{cv.dBvec(0) / sqrt_detg,
@@ -255,7 +268,7 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType *eos_1p,
     c2p_report rep_ent;
 
     // Limit conservatives before calling C2P
-    c2p_Noble.cons_floors_and_ceilings(eos_3p, cv, glo, tauFluid_atmo);
+    c2p_Noble.cons_floors_and_ceilings(eos_3p, cv, glo, tauFluid_atmo, write_back_cons);
 
     // ----- ----- C2P ----- -----
 
@@ -314,6 +327,8 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType *eos_1p,
         default:
           assert(0);
         }
+      } else if (rep_first.adjust_cons) {
+	write_back_cons = true;
       }
 
       if (rep_first.failed() && rep_second.failed()) {
@@ -370,7 +385,11 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType *eos_1p,
               pv.Bvec = Bup;
               atmo.set(pv, cv, glo);
             }
-          }
+	    write_back_cons = true;
+
+          } else if (rep_ent.adjust_cons) {
+            write_back_cons = true;
+	  }
 
         } else {
 
@@ -417,12 +436,17 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType *eos_1p,
             pv.Bvec = Bup;
             atmo.set(pv, cv, glo);
           }
+	  write_back_cons = true;
         }
+
+      } else if (rep_first.failed() && rep_second.adjust_cons) {
+	write_back_cons = true;
       }
 
       // Inside mask, C2P success
       if ((mask_local != 1.0) && c2p_flag_local) {
         c2p_Noble.bh_interior<EOSType, true>(eos_3p, pv, cv, glo);
+        write_back_cons = true;
       }
     }
 
@@ -452,8 +476,14 @@ void AsterX_Con2Prim_typeEoS(CCTK_ARGUMENTS, EOSIDType *eos_1p,
         (pv.rho + pv.rho * pv.eps + pv.press) * wlor * wlor * pv.vel(2);
 
     // Write back cv
-    cv.scatter(dens(p.I), momx(p.I), momy(p.I), momz(p.I), tau(p.I), DYe(p.I),
-               DEnt(p.I), dBx(p.I), dBy(p.I), dBz(p.I));
+    if (write_back_cons) {
+      cv.scatter(dens(p.I), momx(p.I), momy(p.I), momz(p.I), tau(p.I), DYe(p.I),
+                 DEnt(p.I), dBx(p.I), dBy(p.I), dBz(p.I));
+    } else if (c2p_flag_code == C2P_PRIME || c2p_flag_code == C2P_SECOND) {
+      DEnt(p.I) = cv.DEnt;
+    } else if (c2p_flag_code == C2P_ENTROPY) {
+      tau(p.I)  = cv.tau; 
+    }
 
     // Update saved prims
     saved_rho(p.I) = rho(p.I);
@@ -549,6 +579,63 @@ extern "C" void AsterX_Con2Prim(CCTK_ARGUMENTS) {
   }
   default:
     assert(0);
+  }
+}
+
+extern "C" void AsterX_SetPointValues(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTSX_AsterX_SetPointValues;
+  DECLARE_CCTK_PARAMETERS;
+
+  constexpr CCTK_REAL one_over_24 = CCTK_REAL(1)/CCTK_REAL(24);
+
+  if (use_ho_fv) {
+         
+    grid.loop_allmn_device<1, 1, 1>(
+        grid.nghostzones, 1,
+        [=] CCTK_DEVICE(const PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+
+	  // Eq. (16) from https://arxiv.org/pdf/2310.11831 
+          dens_pv(p.I) =  dens(p.I) - one_over_24*laplace_3d(dens,p);
+          momx_pv(p.I) =  momx(p.I) - one_over_24*laplace_3d(momx,p);
+          momy_pv(p.I) =  momy(p.I) - one_over_24*laplace_3d(momy,p);
+          momz_pv(p.I) =  momz(p.I) - one_over_24*laplace_3d(momz,p);
+          tau_pv(p.I)  =  tau(p.I) - one_over_24*laplace_3d(tau,p);
+          DYe_pv(p.I)  =  DYe(p.I) - one_over_24*laplace_3d(DYe,p);
+          DEnt_pv(p.I) =  DEnt(p.I) - one_over_24*laplace_3d(DEnt,p);
+
+        });
+
+    grid.loop_outer_n_device<1, 1, 1>(
+        grid.nghostzones, 1,
+        [=] CCTK_DEVICE(const PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+
+	  // Use 2nd order accurate conversion at boundary
+          dens_pv(p.I) =  dens(p.I);
+          momx_pv(p.I) =  momx(p.I);
+          momy_pv(p.I) =  momy(p.I);
+          momz_pv(p.I) =  momz(p.I);
+          tau_pv(p.I)  =  tau(p.I);
+          DYe_pv(p.I)  =  DYe(p.I);
+          DEnt_pv(p.I) =  DEnt(p.I);
+
+        });
+
+  } else {
+
+    grid.loop_all_device<1, 1, 1>(
+        grid.nghostzones,
+        [=] CCTK_DEVICE(const PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+         
+          // Set to zero for now
+          dens_pv(p.I) = 0.0;
+          momx_pv(p.I) = 0.0;
+          momy_pv(p.I) = 0.0;
+          momz_pv(p.I) = 0.0;
+          tau_pv(p.I)  = 0.0;
+          DYe_pv(p.I)  = 0.0;
+          DEnt_pv(p.I) = 0.0;
+
+        });
   }
 }
 
