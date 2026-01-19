@@ -106,8 +106,24 @@ SCHEDULE AsterX_Prim2Con_Initial IN AsterX_InitialGroup AFTER AsterX_CheckPrims
   READS: HydroBaseX::rho(interior) HydroBaseX::vel(interior) HydroBaseX::eps(interior) HydroBaseX::press(interior) HydroBaseX::Bvec(interior)
   READS: HydroBaseX::entropy(interior) HydroBaseX::Ye(interior)
   WRITES: dens(interior) tau(interior) DEnt(interior) mom(interior) DYe(interior) dB(interior)
-  SYNC: dens tau DEnt mom dYe dB 
+  WRITES: cons_vector_pv(interior)
+  SYNC: dens tau DEnt mom DYe dB cons_vector_pv
 } "Compute conserved variables from primitive variables at initial"
+
+if (use_ho_fv) {
+  SCHEDULE AsterX_SetCellAverage IN AsterX_InitialGroup AFTER AsterX_Prim2Con_Initial BEFORE AsterX_CommConsCA
+  {
+    LANG: C
+    READS: cons_vector_pv(everywhere) 
+    WRITES: dens(everywhere) tau(everywhere) DEnt(everywhere) mom(everywhere) DYe(everywhere)
+  } "Compute cell-averages of conserved variables"
+
+  SCHEDULE AsterX_CommConsCA IN AsterX_InitialGroup AFTER AsterX_SetCellAverage BEFORE AsterX_TouchNonEvolVarsGroup 
+  {
+    LANG: C
+    OPTIONS: global
+  } "Communicate conservatives between processes"
+}
 
 if (zero_psi) {
   SCHEDULE AsterX_PsiZero_Initial IN AsterX_InitialGroup AFTER AsterX_Prim2Con_Initial
