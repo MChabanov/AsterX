@@ -1200,42 +1200,125 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   /* End code for upwindCT */
 }
 
-// Calculate the fluxes in direction `dir`. This function is more
-// complex because it has to handle any direction, but as reward,
-// there is only one function, not three.
+/* The iteration box that grid.loop_mixpn_device<CI,CJ,CK>(grid.nghostzones,
+ * ord) traverses (see CarpetX Loop/src/loop_device.hxx, loop_mixpn_device):
+ * all points of the tile in the cell-centred (transverse) directions,
+ * interior +-ord in the vertex-centred (face-normal) direction, with the
+ * +-ord applied after the tile clamping. Computed with the same
+ * box_int/box_all calls on the same grid object, so the fused sweep below
+ * reproduces the pre-fusion per-direction domains exactly. */
+template <int CI, int CJ, int CK>
+static void calc_mixpn_box(const GridDescBaseDevice &grid, const int ord,
+                           vect<int, dim> &imin, vect<int, dim> &imax) {
+  vect<int, dim> imin_int, imax_int, imin_all, imax_all;
+  grid.box_int<CI, CJ, CK>(grid.nghostzones, imin_int, imax_int);
+  grid.box_all<CI, CJ, CK>(grid.nghostzones, imin_all, imax_all);
+  constexpr vect<int, dim> facetype{CI, CJ, CK};
+  for (int d = 0; d < dim; ++d) {
+    imin[d] = facetype[d] ? imin_all[d] : imin_int[d] - ord;
+    imax[d] = facetype[d] ? imax_all[d] : imax_int[d] + ord;
+  }
+}
+
+/* Zero the direction-`dir_i` flux and aux face grid functions -- the
+ * initialization pass of the flux computation, still one cheap face-centred
+ * sweep per direction as before the fusion (extracted verbatim from the old
+ * CalcFlux init loop; fusing these passes too is deferred -- Step C). */
 template <int dir_i, typename EOSType>
-void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
-              const reconstruction_t reconstruction,
-              const reconstruction_t reconstruction_LO,
-              const reconstruct_params_t reconstruct_params,
-              const flux_t fluxtype) {
+void ZeroFluxAux(const GridDescBaseDevice &grid,
+                 const FluxContext<EOSType> &fx) {
+  static_assert(dir_i >= 0 && dir_i < 3, "");
+
+  const auto &fluxdenss = fx.fluxdenss;
+  const auto &fluxDEnts = fx.fluxDEnts;
+  const auto &fluxmomxs = fx.fluxmomxs;
+  const auto &fluxmomys = fx.fluxmomys;
+  const auto &fluxmomzs = fx.fluxmomzs;
+  const auto &fluxtaus = fx.fluxtaus;
+  const auto &fluxDYes = fx.fluxDYes;
+  const auto &fluxB_j = fx.fluxB_j;
+  const auto &fluxB_k = fx.fluxB_k;
+  const auto &vbar_j = fx.vbar_j;
+  const auto &vbar_k = fx.vbar_k;
+  const auto &ap_face = fx.ap_face;
+  const auto &am_face = fx.am_face;
+  const auto &gf_theta = fx.gf_theta;
+
+  // Face-centred grid functions (in direction `dir_i`)
+  constexpr array<int, dim> face_centred = {!(dir_i == 0), !(dir_i == 1),
+                                            !(dir_i == 2)};
+
+  // initialize to zero
+  grid.loop_all_device<face_centred[0], face_centred[1], face_centred[2]>(
+      grid.nghostzones,
+      [=] CCTK_DEVICE(const PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+        fluxdenss(dir_i)(p.I) = 0;
+        fluxDEnts(dir_i)(p.I) = 0;
+        fluxmomxs(dir_i)(p.I) = 0;
+        fluxmomys(dir_i)(p.I) = 0;
+        fluxmomzs(dir_i)(p.I) = 0;
+        fluxtaus(dir_i)(p.I) = 0;
+        fluxDYes(dir_i)(p.I) = 0;
+        fluxB_j(dir_i)(p.I) = 0;
+        fluxB_k(dir_i)(p.I) = 0;
+
+        ap_face(dir_i)(p.I) = 0;
+        am_face(dir_i)(p.I) = 0;
+        vbar_j(dir_i)(p.I) = 0;
+        vbar_k(dir_i)(p.I) = 0;
+
+        gf_theta(dir_i)(p.I) = 1.0;
+      });
+}
+
+// Calculate the fluxes in ALL THREE directions in one fused sweep over the
+// grid: at every point of the union of the three per-direction face domains,
+// each direction whose domain contains the point gets its face flux computed
+// (CalcFluxAtFace<0/1/2>). This replaces the previous three per-direction
+// sweeps -- the input fields are streamed through the cache once instead of
+// three times, and one kernel launches instead of three. The set of faces
+// computed, and the arithmetic per face, are identical to the per-direction
+// sweeps (golden-master verified).
+template <typename EOSType>
+void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
+                 const reconstruction_t reconstruction,
+                 const reconstruction_t reconstruction_LO,
+                 const reconstruct_params_t reconstruct_params,
+                 const flux_t fluxtype) {
   DECLARE_CCTK_ARGUMENTSX_AsterX_Fluxes;
   DECLARE_CCTK_PARAMETERS;
 
+  // Ghost zones required by the reconstruction stencil. The fused sweep
+  // computes all three directions, so all of them must satisfy it (the same
+  // requirement the three per-direction CalcFlux<0/1/2> calls asserted).
+  const auto require_ghosts = [&](const int n) {
+    for (int d = 0; d < dim; ++d)
+      assert(cctk_nghostzones[d] >= n);
+  };
   switch (reconstruction) {
   case reconstruction_t::Godunov:
-    assert(cctk_nghostzones[dir_i] >= 1);
+    require_ghosts(1);
     break;
   case reconstruction_t::minmod:
-    assert(cctk_nghostzones[dir_i] >= 2);
+    require_ghosts(2);
     break;
   case reconstruction_t::monocentral:
-    assert(cctk_nghostzones[dir_i] >= 2);
+    require_ghosts(2);
     break;
   case reconstruction_t::ppm:
-    assert(cctk_nghostzones[dir_i] >= 3);
+    require_ghosts(3);
     break;
   case reconstruction_t::eppm:
-    assert(cctk_nghostzones[dir_i] >= 3);
+    require_ghosts(3);
     break;
   case reconstruction_t::wenoz:
-    assert(cctk_nghostzones[dir_i] >= 3);
+    require_ghosts(3);
     break;
   case reconstruction_t::wenozp:
-    assert(cctk_nghostzones[dir_i] >= 3);
+    require_ghosts(3);
     break;
   case reconstruction_t::mp5:
-    assert(cctk_nghostzones[dir_i] >= 3);
+    require_ghosts(3);
     break;
   }
 
@@ -1275,15 +1358,9 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
   /* grid functions for PP flux limiter */
   const vec<GF3D2<CCTK_REAL>, dim> gf_theta{theta_x, theta_y, theta_z};
 
-  static_assert(dir_i >= 0 && dir_i < 3, "");
-
   // Velocity limit from Con2PrimFactory parameters
   const CCTK_REAL w_lim = sqrt(1.0 + vw_lim * vw_lim);
   const CCTK_REAL v_lim = vw_lim / w_lim;
-
-  // Face-centred grid functions (in direction `dir_i`)
-  constexpr array<int, dim> face_centred = {!(dir_i == 0), !(dir_i == 1),
-                                            !(dir_i == 2)};
 
   // Flag for tabulated EOS
   const bool istab = CCTK_EQUALS(evolution_eos, "Tabulated3d") ? true : false;
@@ -1362,36 +1439,60 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
   };
 
   // initialize to zero
-  grid.loop_all_device<face_centred[0], face_centred[1], face_centred[2]>(
-      grid.nghostzones,
-      [=] CCTK_DEVICE(const PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
-        fluxdenss(dir_i)(p.I) = 0;
-        fluxDEnts(dir_i)(p.I) = 0;
-        fluxmomxs(dir_i)(p.I) = 0;
-        fluxmomys(dir_i)(p.I) = 0;
-        fluxmomzs(dir_i)(p.I) = 0;
-        fluxtaus(dir_i)(p.I) = 0;
-        fluxDYes(dir_i)(p.I) = 0;
-        fluxB_j(dir_i)(p.I) = 0;
-        fluxB_k(dir_i)(p.I) = 0;
-
-        ap_face(dir_i)(p.I) = 0;
-        am_face(dir_i)(p.I) = 0;
-        vbar_j(dir_i)(p.I) = 0;
-        vbar_k(dir_i)(p.I) = 0;
-
-        gf_theta(dir_i)(p.I) = 1.0;
-      });
+  ZeroFluxAux<0>(grid, fx);
+  ZeroFluxAux<1>(grid, fx);
+  ZeroFluxAux<2>(grid, fx);
 
   const int nloop = (hydro_correction_order - 2) / 2;
-  grid.loop_mixpn_device<face_centred[0], face_centred[1], face_centred[2]>(
-      grid.nghostzones, nloop, [=] CCTK_DEVICE(const PointDesc &p) {
-        /* Coordinates of this face. In this face-centred loop p.X is the
-         * face coordinate itself; it is computed here, not in
-         * CalcFluxAtFace, so that the per-face computation does not depend
-         * on the centering of the enclosing loop. */
-        const vect<CCTK_REAL, dim> face_X = p.X;
-        CalcFluxAtFace<dir_i>(fx, p, face_X);
+
+  /* Per-direction iteration boxes: for each direction, exactly the box the
+   * pre-fusion grid.loop_mixpn_device<face_centred...>(grid.nghostzones,
+   * nloop) traversed (see calc_mixpn_box). */
+  vect<int, dim> imin0, imax0, imin1, imax1, imin2, imax2;
+  calc_mixpn_box<0, 1, 1>(grid, nloop, imin0, imax0);
+  calc_mixpn_box<1, 0, 1>(grid, nloop, imin1, imax1);
+  calc_mixpn_box<1, 1, 0>(grid, nloop, imin2, imax2);
+
+  /* The fused sweep runs over the union of the three boxes (which contains
+   * face points of all three staggerings; the shared integer index space
+   * makes all three face grid functions addressable from one loop). The
+   * PointDesc fields the per-face computation uses -- p.I, p.DI, p.DX -- are
+   * centering-independent; the face coordinate is NOT taken from p.X but
+   * computed per direction below. */
+  const vect<int, dim> fmin = min(min(imin0, imin1), imin2);
+  const vect<int, dim> fmax = max(max(imax0, imax1), imax2);
+  vect<int, dim> bnd_min, bnd_max;
+  grid.boundary_box<0, 0, 0>(grid.nghostzones, bnd_min, bnd_max);
+
+  /* CarpetX computes p.X = x0 + (lbnd + I - (!CI)/2) * dx for a loop of
+   * centering CI (Loop/src/loop.hxx, point_desc). face_X below evaluates the
+   * same expression with each direction's face centering, so it is
+   * bit-identical to the p.X that the per-direction face-centred loops
+   * supplied to CalcFluxAtFace before the fusion. */
+  const vect<CCTK_REAL, dim> x0 = grid.x0;
+  const vect<CCTK_REAL, dim> dx = grid.dx;
+  const vect<int, dim> lbnd = grid.lbnd;
+
+  grid.loop_box_device<0, 0, 0>(
+      bnd_min, bnd_max, fmin, fmax, [=] CCTK_DEVICE(const PointDesc &p) {
+        if (all(p.I >= imin0) && all(p.I < imax0)) {
+          constexpr vect<bool, dim> face_centred{false, true, true};
+          const vect<CCTK_REAL, dim> face_X =
+              x0 + (lbnd + p.I - vect<CCTK_REAL, dim>(!face_centred) / 2) * dx;
+          CalcFluxAtFace<0>(fx, p, face_X);
+        }
+        if (all(p.I >= imin1) && all(p.I < imax1)) {
+          constexpr vect<bool, dim> face_centred{true, false, true};
+          const vect<CCTK_REAL, dim> face_X =
+              x0 + (lbnd + p.I - vect<CCTK_REAL, dim>(!face_centred) / 2) * dx;
+          CalcFluxAtFace<1>(fx, p, face_X);
+        }
+        if (all(p.I >= imin2) && all(p.I < imax2)) {
+          constexpr vect<bool, dim> face_centred{true, true, false};
+          const vect<CCTK_REAL, dim> face_X =
+              x0 + (lbnd + p.I - vect<CCTK_REAL, dim>(!face_centred) / 2) * dx;
+          CalcFluxAtFace<2>(fx, p, face_X);
+        }
       });
 }
 
@@ -1492,11 +1593,7 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
     // Get local eos object
     auto eos_3p_ig = global_eos_3p_ig;
 
-    CalcFlux<0>(cctkGH, eos_3p_ig, rec_var, reconstruction, reconstruction_LO,
-                reconstruct_params, fluxtype);
-    CalcFlux<1>(cctkGH, eos_3p_ig, rec_var, reconstruction, reconstruction_LO,
-                reconstruct_params, fluxtype);
-    CalcFlux<2>(cctkGH, eos_3p_ig, rec_var, reconstruction, reconstruction_LO,
+    CalcFluxAll(cctkGH, eos_3p_ig, rec_var, reconstruction, reconstruction_LO,
                 reconstruct_params, fluxtype);
     break;
   }
@@ -1506,21 +1603,13 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
     if (global_eos_3p_hyb_pwpoly) {
       auto eos_3p_hyb = global_eos_3p_hyb_pwpoly;
 
-      CalcFlux<0>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
-                  reconstruction_LO, reconstruct_params, fluxtype);
-      CalcFlux<1>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
-                  reconstruction_LO, reconstruct_params, fluxtype);
-      CalcFlux<2>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
+      CalcFluxAll(cctkGH, eos_3p_hyb, rec_var, reconstruction,
                   reconstruction_LO, reconstruct_params, fluxtype);
 
     } else if (global_eos_3p_hyb_poly) {
       auto eos_3p_hyb = global_eos_3p_hyb_poly;
 
-      CalcFlux<0>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
-                  reconstruction_LO, reconstruct_params, fluxtype);
-      CalcFlux<1>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
-                  reconstruction_LO, reconstruct_params, fluxtype);
-      CalcFlux<2>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
+      CalcFluxAll(cctkGH, eos_3p_hyb, rec_var, reconstruction,
                   reconstruction_LO, reconstruct_params, fluxtype);
 
     } else {
@@ -1534,11 +1623,7 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
     // Get local eos object
     auto eos_3p_tab3d = global_eos_3p_tab3d;
 
-    CalcFlux<0>(cctkGH, eos_3p_tab3d, rec_var, reconstruction,
-                reconstruction_LO, reconstruct_params, fluxtype);
-    CalcFlux<1>(cctkGH, eos_3p_tab3d, rec_var, reconstruction,
-                reconstruction_LO, reconstruct_params, fluxtype);
-    CalcFlux<2>(cctkGH, eos_3p_tab3d, rec_var, reconstruction,
+    CalcFluxAll(cctkGH, eos_3p_tab3d, rec_var, reconstruction,
                 reconstruction_LO, reconstruct_params, fluxtype);
     break;
   }
