@@ -32,6 +32,94 @@ enum class flux_t { LxF, HLLE };
 enum class eos_3param { IdealGas, Hybrid, Tabulated };
 enum class rec_var_t { v_vec, z_vec, s_vec };
 
+/* Everything the per-face flux computation needs from its caller.
+ *
+ * CalcFlux builds one instance per call and the loop lambda captures it by
+ * value -- the same values it captured individually before the per-face code
+ * was extracted into a helper. Members carry the same names as the
+ * corresponding locals of CalcFlux (and the DECLARE_CCTK_ARGUMENTSX /
+ * DECLARE_CCTK_PARAMETERS variables), so the helper can unpack them into
+ * identically-named references and the extracted body stays verbatim. */
+template <typename EOSType> struct FluxContext {
+  /* grid functions for fluxes */
+  vec<GF3D2<CCTK_REAL>, dim> fluxdenss;
+  vec<GF3D2<CCTK_REAL>, dim> fluxDEnts;
+  vec<GF3D2<CCTK_REAL>, dim> fluxmomxs;
+  vec<GF3D2<CCTK_REAL>, dim> fluxmomys;
+  vec<GF3D2<CCTK_REAL>, dim> fluxmomzs;
+  vec<GF3D2<CCTK_REAL>, dim> fluxtaus;
+  vec<GF3D2<CCTK_REAL>, dim> fluxDYes;
+  vec<GF3D2<CCTK_REAL>, dim> fluxBxs;
+  vec<GF3D2<CCTK_REAL>, dim> fluxBys;
+  vec<GF3D2<CCTK_REAL>, dim> fluxBzs;
+
+  /* grid functions */
+  vec<GF3D2<const CCTK_REAL>, dim> gf_vels;
+  vec<GF3D2<const CCTK_REAL>, dim> gf_zvec;
+  vec<GF3D2<const CCTK_REAL>, dim> gf_svec;
+  vec<GF3D2<const CCTK_REAL>, dim> gf_Bvecs;
+  vec<GF3D2<const CCTK_REAL>, dim> gf_dBstags;
+  vec<GF3D2<const CCTK_REAL>, dim> gf_beta;
+  smat<GF3D2<const CCTK_REAL>, dim> gf_g;
+
+  /* grid functions for Upwind CT */
+  vec<GF3D2<CCTK_REAL>, dim> vbar_j;
+  vec<GF3D2<CCTK_REAL>, dim> vbar_k;
+  vec<GF3D2<CCTK_REAL>, dim> ap_face;
+  vec<GF3D2<CCTK_REAL>, dim> am_face;
+
+  /* grid functions for PP flux limiter */
+  vec<GF3D2<CCTK_REAL>, dim> gf_theta;
+
+  /* cell-centred scalar grid functions (DECLARE_CCTK_ARGUMENTSX names) */
+  GF3D2<const CCTK_REAL> alp;
+  GF3D2<const CCTK_REAL> rho;
+  GF3D2<const CCTK_REAL> press;
+  GF3D2<const CCTK_REAL> eps;
+  GF3D2<const CCTK_REAL> entropy;
+  GF3D2<const CCTK_REAL> Ye;
+  GF3D2<const CCTK_REAL> temperature;
+  GF3D2<const CCTK_REAL> LOflag;
+  GF3D2<const CCTK_REAL> dens;
+  GF3D2<const CCTK_REAL> DYe;
+
+  /* EOS object and solver settings (CalcFlux arguments) */
+  EOSType *eos_3p;
+  rec_var_t rec_var;
+  reconstruction_t reconstruction;
+  reconstruction_t reconstruction_LO;
+  reconstruct_params_t reconstruct_params;
+  flux_t fluxtype;
+
+  /* flag for tabulated EOS */
+  bool istab;
+
+  /* velocity limit from Con2PrimFactory parameters */
+  CCTK_REAL v_lim;
+
+  /* parameters (DECLARE_CCTK_PARAMETERS names) */
+  CCTK_REAL r_atmo;
+  CCTK_REAL rho_abs_min;
+  CCTK_REAL n_rho_atmo;
+  CCTK_REAL recon_thresh;
+  CCTK_REAL p_atmo;
+  CCTK_REAL n_press_atmo;
+  CCTK_REAL t_atmo;
+  CCTK_REAL n_temp_atmo;
+  CCTK_REAL Ye_atmo;
+  CCTK_REAL atmo_tol;
+  CCTK_INT use_press_atmo;
+  CCTK_INT reconstruct_with_temperature;
+  CCTK_INT use_pplim;
+  CCTK_INT loworder_flux;
+
+  /* flesh scalars (DECLARE_CCTK_ARGUMENTSX names; CCTK_DELTA_TIME expands
+   * to cctk_delta_time / cctk_timefac) */
+  CCTK_REAL cctk_delta_time;
+  int cctk_timefac;
+  int cctk_iteration; // used by the CCTK_DEBUG diagnostics only
+};
+
 // Calculate the fluxes in direction `dir`. This function is more
 // complex because it has to handle any direction, but as reward,
 // there is only one function, not three.
@@ -157,6 +245,80 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
 
   // Flag for tabulated EOS
   const bool istab = CCTK_EQUALS(evolution_eos, "Tabulated3d") ? true : false;
+
+  /* Context for the per-face flux computation. Positional aggregate
+   * initialization: the initializers below must stay in exactly the order of
+   * the member declarations of FluxContext (each initializer is the
+   * identically-named local/argument/parameter). */
+  const FluxContext<EOSType> fx{
+      /* grid functions for fluxes */
+      fluxdenss,
+      fluxDEnts,
+      fluxmomxs,
+      fluxmomys,
+      fluxmomzs,
+      fluxtaus,
+      fluxDYes,
+      fluxBxs,
+      fluxBys,
+      fluxBzs,
+      /* grid functions */
+      gf_vels,
+      gf_zvec,
+      gf_svec,
+      gf_Bvecs,
+      gf_dBstags,
+      gf_beta,
+      gf_g,
+      /* grid functions for Upwind CT */
+      vbar_j,
+      vbar_k,
+      ap_face,
+      am_face,
+      /* grid functions for PP flux limiter */
+      gf_theta,
+      /* cell-centred scalar grid functions */
+      alp,
+      rho,
+      press,
+      eps,
+      entropy,
+      Ye,
+      temperature,
+      LOflag,
+      dens,
+      DYe,
+      /* EOS object and solver settings */
+      eos_3p,
+      rec_var,
+      reconstruction,
+      reconstruction_LO,
+      reconstruct_params,
+      fluxtype,
+      /* flag for tabulated EOS */
+      istab,
+      /* velocity limit */
+      v_lim,
+      /* parameters */
+      r_atmo,
+      rho_abs_min,
+      n_rho_atmo,
+      recon_thresh,
+      p_atmo,
+      n_press_atmo,
+      t_atmo,
+      n_temp_atmo,
+      Ye_atmo,
+      atmo_tol,
+      use_press_atmo,
+      reconstruct_with_temperature,
+      use_pplim,
+      loworder_flux,
+      /* flesh scalars */
+      cctk_delta_time,
+      cctk_timefac,
+      cctk_iteration,
+  };
 
   // initialize to zero
   grid.loop_all_device<face_centred[0], face_centred[1], face_centred[2]>(
