@@ -47,7 +47,7 @@ CCTK_REAL flux_x TYPE=gf CENTERING={vcc} TAGS='checkpoint="no"'
   fxtau
   fxDYe
   fxDEnt
-  fxBx fxBy fxBz
+  fxBy fxBz
 } "Fluxes in x direction"
 
 CCTK_REAL flux_y TYPE=gf CENTERING={cvc} TAGS='checkpoint="no"'
@@ -57,7 +57,7 @@ CCTK_REAL flux_y TYPE=gf CENTERING={cvc} TAGS='checkpoint="no"'
   fytau
   fyDYe
   fyDEnt
-  fyBx fyBy fyBz
+  fyBx fyBz
 } "Fluxes in y direction"
 
 CCTK_REAL flux_z TYPE=gf CENTERING={ccv} TAGS='checkpoint="no"'
@@ -67,7 +67,7 @@ CCTK_REAL flux_z TYPE=gf CENTERING={ccv} TAGS='checkpoint="no"'
   fztau
   fzDYe
   fzDEnt
-  fzBx fzBy fzBz
+  fzBx fzBy
 } "Fluxes in z direction"
 
 # ----- flux limiter

@@ -49,9 +49,11 @@ template <typename EOSType> struct FluxContext {
   vec<GF3D2<CCTK_REAL>, dim> fluxmomzs;
   vec<GF3D2<CCTK_REAL>, dim> fluxtaus;
   vec<GF3D2<CCTK_REAL>, dim> fluxDYes;
-  vec<GF3D2<CCTK_REAL>, dim> fluxBxs;
-  vec<GF3D2<CCTK_REAL>, dim> fluxBys;
-  vec<GF3D2<CCTK_REAL>, dim> fluxBzs;
+  /* off-diagonal B-fluxes, indexed by the flux direction i: flux of B_{dir_j}
+   * resp. B_{dir_k} in direction i (the diagonal flux of B_{dir_i} in
+   * direction dir_i vanishes identically and has no grid function) */
+  vec<GF3D2<CCTK_REAL>, dim> fluxB_j;
+  vec<GF3D2<CCTK_REAL>, dim> fluxB_k;
 
   /* grid functions */
   vec<GF3D2<const CCTK_REAL>, dim> gf_vels;
@@ -148,9 +150,8 @@ CalcFluxAtFace(const FluxContext<EOSType> &fx, const PointDesc &p,
   const auto &fluxmomzs = fx.fluxmomzs;
   const auto &fluxtaus = fx.fluxtaus;
   const auto &fluxDYes = fx.fluxDYes;
-  const auto &fluxBxs = fx.fluxBxs;
-  const auto &fluxBys = fx.fluxBys;
-  const auto &fluxBzs = fx.fluxBzs;
+  const auto &fluxB_j = fx.fluxB_j;
+  const auto &fluxB_k = fx.fluxB_k;
   const auto &gf_vels = fx.gf_vels;
   const auto &gf_zvec = fx.gf_zvec;
   const auto &gf_svec = fx.gf_svec;
@@ -769,12 +770,10 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     fluxmomzs(dir_i)(p.I) = calcflux(lambda, moms_rc(2), flux_moms(2));
     fluxtaus(dir_i)(p.I) = calcflux(lambda, tau_rc, flux_tau);
     fluxDYes(dir_i)(p.I) = calcflux(lambda, DYe_rc, flux_DYe);
-    fluxBxs(dir_i)(p.I) =
-        (dir_i != 0) * calcflux(lambda, Btildes_rc(0), flux_Btildes(0));
-    fluxBys(dir_i)(p.I) =
-        (dir_i != 1) * calcflux(lambda, Btildes_rc(1), flux_Btildes(1));
-    fluxBzs(dir_i)(p.I) =
-        (dir_i != 2) * calcflux(lambda, Btildes_rc(2), flux_Btildes(2));
+    fluxB_j(dir_i)(p.I) =
+        calcflux(lambda, Btildes_rc(dir_j), flux_Btildes(dir_j));
+    fluxB_k(dir_i)(p.I) =
+        calcflux(lambda, Btildes_rc(dir_k), flux_Btildes(dir_k));
   } else {
     fluxdenss(dir_i)(p.I) = laxf(lambda, dens_rc, flux_dens);
     fluxDEnts(dir_i)(p.I) = laxf(lambda, DEnt_rc, flux_DEnt);
@@ -783,12 +782,10 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     fluxmomzs(dir_i)(p.I) = laxf(lambda, moms_rc(2), flux_moms(2));
     fluxtaus(dir_i)(p.I) = laxf(lambda, tau_rc, flux_tau);
     fluxDYes(dir_i)(p.I) = laxf(lambda, DYe_rc, flux_DYe);
-    fluxBxs(dir_i)(p.I) =
-        (dir_i != 0) * laxf(lambda, Btildes_rc(0), flux_Btildes(0));
-    fluxBys(dir_i)(p.I) =
-        (dir_i != 1) * laxf(lambda, Btildes_rc(1), flux_Btildes(1));
-    fluxBzs(dir_i)(p.I) =
-        (dir_i != 2) * laxf(lambda, Btildes_rc(2), flux_Btildes(2));
+    fluxB_j(dir_i)(p.I) =
+        laxf(lambda, Btildes_rc(dir_j), flux_Btildes(dir_j));
+    fluxB_k(dir_i)(p.I) =
+        laxf(lambda, Btildes_rc(dir_k), flux_Btildes(dir_k));
   }
 
   /* Positivity Preserving Limiter */
@@ -1099,8 +1096,8 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
       isnan(flux_Btildes(2)(1)) || isnan(fluxdenss(dir_i)(p.I)) ||
       isnan(fluxmomxs(dir_i)(p.I)) || isnan(fluxmomys(dir_i)(p.I)) ||
       isnan(fluxmomzs(dir_i)(p.I)) || isnan(fluxtaus(dir_i)(p.I)) ||
-      isnan(fluxBxs(dir_i)(p.I)) || isnan(fluxBys(dir_i)(p.I)) ||
-      isnan(fluxBzs(dir_i)(p.I)) || rho_rc(0) < 0.0 || rho_rc(1) < 0.0 ||
+      isnan(fluxB_j(dir_i)(p.I)) || isnan(fluxB_k(dir_i)(p.I)) ||
+      rho_rc(0) < 0.0 || rho_rc(1) < 0.0 ||
       press_rc(0) < 0.0 || press_rc(1) < 0.0) {
     printf("cctk_iteration = %i,  dir_i = %i,  ijk = %i, %i, %i, "
            "x, y, z = %16.8e, %16.8e, %16.8e.\n",
@@ -1109,8 +1106,8 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     printf("  fluxmoms  = %16.8e, %16.8e, %16.8e,\n", fluxmomxs(dir_i)(p.I),
            fluxmomys(dir_i)(p.I), fluxmomzs(dir_i)(p.I));
     printf("  fluxtaus  = %16.8e,\n", fluxtaus(dir_i)(p.I));
-    printf("  fluxBs    = %16.8e, %16.8e, %16.8e\n", fluxBxs(dir_i)(p.I),
-           fluxBys(dir_i)(p.I), fluxBzs(dir_i)(p.I));
+    printf("  fluxBs(j,k) = %16.8e, %16.8e\n", fluxB_j(dir_i)(p.I),
+           fluxB_k(dir_i)(p.I));
     printf("  flux_denss = %16.8e, %16.8e,\n", flux_dens(0), flux_dens(1));
     printf("  flux_moms  = %16.8e, %16.8e, %16.8e, %16.8e, %16.8e, %16.8e,\n",
            flux_moms(0)(0), flux_moms(0)(1), flux_moms(1)(0), flux_moms(1)(1),
@@ -1250,9 +1247,12 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
   const vec<GF3D2<CCTK_REAL>, dim> fluxmomzs{fxmomz, fymomz, fzmomz};
   const vec<GF3D2<CCTK_REAL>, dim> fluxtaus{fxtau, fytau, fztau};
   const vec<GF3D2<CCTK_REAL>, dim> fluxDYes{fxDYe, fyDYe, fzDYe};
-  const vec<GF3D2<CCTK_REAL>, dim> fluxBxs{fxBx, fyBx, fzBx};
-  const vec<GF3D2<CCTK_REAL>, dim> fluxBys{fxBy, fyBy, fzBy};
-  const vec<GF3D2<CCTK_REAL>, dim> fluxBzs{fxBz, fyBz, fzBz};
+  /* off-diagonal B-fluxes, indexed by the flux direction i: flux of B_{dir_j}
+   * resp. B_{dir_k} in direction i, cf. vbar_j/vbar_k below (the diagonal
+   * flux of B_{dir_i} in direction dir_i vanishes identically and has no
+   * grid function) */
+  const vec<GF3D2<CCTK_REAL>, dim> fluxB_j{fxBy, fyBz, fzBx};
+  const vec<GF3D2<CCTK_REAL>, dim> fluxB_k{fxBz, fyBx, fzBy};
 
   /* grid functions */
   const vec<GF3D2<const CCTK_REAL>, dim> gf_vels{velx, vely, velz};
@@ -1301,9 +1301,8 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
       fluxmomzs,
       fluxtaus,
       fluxDYes,
-      fluxBxs,
-      fluxBys,
-      fluxBzs,
+      fluxB_j,
+      fluxB_k,
       /* grid functions */
       gf_vels,
       gf_zvec,
@@ -1373,9 +1372,8 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
         fluxmomzs(dir_i)(p.I) = 0;
         fluxtaus(dir_i)(p.I) = 0;
         fluxDYes(dir_i)(p.I) = 0;
-        fluxBxs(dir_i)(p.I) = 0;
-        fluxBys(dir_i)(p.I) = 0;
-        fluxBzs(dir_i)(p.I) = 0;
+        fluxB_j(dir_i)(p.I) = 0;
+        fluxB_k(dir_i)(p.I) = 0;
 
         ap_face(dir_i)(p.I) = 0;
         am_face(dir_i)(p.I) = 0;
@@ -1558,9 +1556,11 @@ void CalcE_impl(CCTK_ARGUMENTS, const reconstruction_t reconstruction,
   constexpr int j = (i == 0) ? 1 : ((i == 1) ? 2 : 0);
   constexpr int k = (i == 0) ? 2 : ((i == 1) ? 0 : 1);
 
-  // flux-CT
-  const vec<vec<GF3D2<const CCTK_REAL>, dim>, dim> gf_fBs{
-      {fxBx, fyBx, fzBx}, {fxBy, fyBy, fzBy}, {fxBz, fyBz, fzBz}};
+  // flux-CT: off-diagonal B-fluxes, indexed by the flux direction as in
+  // CalcFlux (gf_fB_j(d) = flux of B_{dir_j(d)} in direction d, etc.; the
+  // diagonal fluxes vanish identically and have no grid functions)
+  const vec<GF3D2<const CCTK_REAL>, dim> gf_fB_j{fxBy, fyBz, fzBx};
+  const vec<GF3D2<const CCTK_REAL>, dim> gf_fB_k{fxBz, fyBx, fzBy};
 
   // upwind-CT
   const vec<GF3D2<const CCTK_REAL>, dim> gf_vels{velx, vely, velz};
@@ -1622,10 +1622,13 @@ void CalcE_impl(CCTK_ARGUMENTS, const reconstruction_t reconstruction,
     grid.loop_int_device<i == 0, i == 1, i == 2>(
         grid.nghostzones,
         [=] CCTK_DEVICE(const PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
-          const CCTK_REAL Fjk = gf_fBs(j)(k)(p.I);
-          const CCTK_REAL Fjk_m = gf_fBs(j)(k)(p.I - p.DI[j]);
-          const CCTK_REAL Fkj = gf_fBs(k)(j)(p.I);
-          const CCTK_REAL Fkj_m = gf_fBs(k)(j)(p.I - p.DI[k]);
+          // (i,j,k) is a cyclic permutation, so the flux of B_j in
+          // direction k is direction k's dir_k-component, gf_fB_k(k), and
+          // the flux of B_k in direction j is gf_fB_j(j)
+          const CCTK_REAL Fjk = gf_fB_k(k)(p.I);
+          const CCTK_REAL Fjk_m = gf_fB_k(k)(p.I - p.DI[j]);
+          const CCTK_REAL Fkj = gf_fB_j(j)(p.I);
+          const CCTK_REAL Fkj_m = gf_fB_j(j)(p.I - p.DI[k]);
           gf_E(i)(p.I) = CCTK_REAL(0.25) * ((Fjk + Fjk_m) - (Fkj + Fkj_m));
         });
   }
