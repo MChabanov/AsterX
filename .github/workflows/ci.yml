@@ -76,13 +76,16 @@ jobs:
       # the committed reference data at a tight (near-machine) tolerance, far
       # stricter than the default testsuite (1e-8). Used to confirm a refactor
       # (e.g. the fused single-sweep flux calculation) reproduces results.
-      # Opt-in: manual run with the `golden_master` input, or a PR labelled
-      # `golden-master`. Off by default so normal CI is unaffected.
+      # Opt-in: manual run with the `golden_master` input, a PR labelled
+      # `golden-master`, or a push whose head commit message contains
+      # `[golden-master]`. Off by default so normal CI is unaffected.
       - name: Golden-master TSV comparison (tight, opt-in)
         if: >-
           ${{ matrix.accelerator == 'cpu' && matrix.real-precision == 'real64' &&
               ((github.event_name == 'workflow_dispatch' && inputs.golden_master) ||
-               contains(github.event.pull_request.labels.*.name, 'golden-master')) }}
+               contains(github.event.pull_request.labels.*.name, 'golden-master') ||
+               (github.event_name == 'push' &&
+                contains(github.event.head_commit.message, '[golden-master]'))) }}
         run: |
           python3 "$GITHUB_WORKSPACE/scripts/compare_tsv.py" \
               "$GITHUB_WORKSPACE/AsterX/test" "$ONEPROC_DIR" "$TWOPROC_DIR"
