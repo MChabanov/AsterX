@@ -167,7 +167,7 @@ calc_avg_neighbors(const vec<T, D> flag, const vec<T, D> u_nbs,
 // upwind-CT related
 
 template <typename T>
-CCTK_DEVICE CCTK_ATTRIBUTE_ALWAYS_INLINE static inline void
+CCTK_DEVICE CCTK_HOST CCTK_ATTRIBUTE_ALWAYS_INLINE static inline void
 maxspeeds_from_lambdas(const vec<vec<T, 4>, 2> &lambda, T &ap, T &am) {
   T lmax = T(0);
   T lmin = T(0);
@@ -185,7 +185,7 @@ maxspeeds_from_lambdas(const vec<vec<T, 4>, 2> &lambda, T &ap, T &am) {
 }
 
 template <typename T>
-CCTK_DEVICE CCTK_ATTRIBUTE_ALWAYS_INLINE static inline T
+CCTK_DEVICE CCTK_HOST CCTK_ATTRIBUTE_ALWAYS_INLINE static inline T
 avg_upwind(T uL, T uR, T ap, T am) noexcept {
   const T s = ap + am;
   if (s <= T(1e-14)) {
