@@ -190,6 +190,11 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
      * (indice 1) side of this face rc = reconstructed variables or
      * computed from reconstructed variables */
 
+    /* Coordinates of this face. In this face-centred loop p.X is the face
+     * coordinate itself; it is kept explicit so that the per-face code below
+     * does not depend on the centering of the enclosing loop. */
+    const vect<CCTK_REAL, dim> face_X = p.X;
+
     /* Interpolate metric components from vertices to faces */
     const CCTK_REAL alp_avg = calc_avg_v2f<dir_i>(alp, p);
     const vec<CCTK_REAL, 3> betas_avg(
@@ -232,10 +237,10 @@ void CalcFlux(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
 
     // Get coordinates at neighboring cell centers
     for (int ii = 0; ii < 3; ii++) {
-      r2_atm(0) += (p.X[ii] - (ii == dir_i) * 0.5 * (p.DX[dir_i])) *
-                   (p.X[ii] - (ii == dir_i) * 0.5 * (p.DX[dir_i]));
-      r2_atm(1) += (p.X[ii] + (ii == dir_i) * 0.5 * (p.DX[dir_i])) *
-                   (p.X[ii] + (ii == dir_i) * 0.5 * (p.DX[dir_i]));
+      r2_atm(0) += (face_X[ii] - (ii == dir_i) * 0.5 * (p.DX[dir_i])) *
+                   (face_X[ii] - (ii == dir_i) * 0.5 * (p.DX[dir_i]));
+      r2_atm(1) += (face_X[ii] + (ii == dir_i) * 0.5 * (p.DX[dir_i])) *
+                   (face_X[ii] + (ii == dir_i) * 0.5 * (p.DX[dir_i]));
     }
     r_atm(0) = sqrt(r2_atm(0));
     r_atm(1) = sqrt(r2_atm(1));
