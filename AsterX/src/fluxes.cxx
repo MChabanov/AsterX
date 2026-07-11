@@ -1220,70 +1220,6 @@ static void calc_mixpn_box(const GridDescBaseDevice &grid, const int ord,
   }
 }
 
-/* Zero the flux and aux face grid functions of all three directions in one
- * fused sweep. Per direction, the point set is exactly the box its former
- * per-direction loop_all_device<face_centred...> pass traversed (the same
- * box_all call on the same grid object); the loop runs over the union of the
- * three boxes with each direction guarded by its own box. The zeroing needs
- * no compile-time direction and no coordinates, so the directions collapse
- * to a runtime loop. */
-template <typename EOSType>
-void ZeroFluxAux(const GridDescBaseDevice &grid,
-                 const FluxContext<EOSType> &fx) {
-  const auto &fluxdenss = fx.fluxdenss;
-  const auto &fluxDEnts = fx.fluxDEnts;
-  const auto &fluxmomxs = fx.fluxmomxs;
-  const auto &fluxmomys = fx.fluxmomys;
-  const auto &fluxmomzs = fx.fluxmomzs;
-  const auto &fluxtaus = fx.fluxtaus;
-  const auto &fluxDYes = fx.fluxDYes;
-  const auto &fluxB_j = fx.fluxB_j;
-  const auto &fluxB_k = fx.fluxB_k;
-  const auto &vbar_j = fx.vbar_j;
-  const auto &vbar_k = fx.vbar_k;
-  const auto &ap_face = fx.ap_face;
-  const auto &am_face = fx.am_face;
-  const auto &gf_theta = fx.gf_theta;
-
-  /* Per-direction boxes: exactly what loop_all_device<face_centred...>
-   * (grid.nghostzones) iterated for each direction before the fusion. */
-  vect<vect<int, dim>, dim> imin, imax;
-  grid.box_all<0, 1, 1>(grid.nghostzones, imin[0], imax[0]);
-  grid.box_all<1, 0, 1>(grid.nghostzones, imin[1], imax[1]);
-  grid.box_all<1, 1, 0>(grid.nghostzones, imin[2], imax[2]);
-
-  const vect<int, dim> fmin = min(min(imin[0], imin[1]), imin[2]);
-  const vect<int, dim> fmax = max(max(imax[0], imax[1]), imax[2]);
-  vect<int, dim> bnd_min, bnd_max;
-  grid.boundary_box<0, 0, 0>(grid.nghostzones, bnd_min, bnd_max);
-
-  // initialize to zero
-  grid.loop_box_device<0, 0, 0>(
-      bnd_min, bnd_max, fmin, fmax,
-      [=] CCTK_DEVICE(const PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
-        for (int dir = 0; dir < dim; ++dir) {
-          if (all(p.I >= imin[dir]) && all(p.I < imax[dir])) {
-            fluxdenss(dir)(p.I) = 0;
-            fluxDEnts(dir)(p.I) = 0;
-            fluxmomxs(dir)(p.I) = 0;
-            fluxmomys(dir)(p.I) = 0;
-            fluxmomzs(dir)(p.I) = 0;
-            fluxtaus(dir)(p.I) = 0;
-            fluxDYes(dir)(p.I) = 0;
-            fluxB_j(dir)(p.I) = 0;
-            fluxB_k(dir)(p.I) = 0;
-
-            ap_face(dir)(p.I) = 0;
-            am_face(dir)(p.I) = 0;
-            vbar_j(dir)(p.I) = 0;
-            vbar_k(dir)(p.I) = 0;
-
-            gf_theta(dir)(p.I) = 1.0;
-          }
-        }
-      });
-}
-
 // Calculate the fluxes in ALL THREE directions in one fused sweep over the
 // grid: at every point of the union of the three per-direction face domains,
 // each direction whose domain contains the point gets its face flux computed
@@ -1451,27 +1387,40 @@ void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
       cctk_iteration,
   };
 
-  // initialize to zero
-  ZeroFluxAux(grid, fx);
-
   const int nloop = (hydro_correction_order - 2) / 2;
 
-  /* Per-direction iteration boxes: for each direction, exactly the box the
-   * pre-fusion grid.loop_mixpn_device<face_centred...>(grid.nghostzones,
-   * nloop) traversed (see calc_mixpn_box). */
+  /* Per-direction iteration boxes: for each direction, the
+   * zero-initialization box (exactly what the pre-fusion
+   * loop_all_device<face_centred...>(grid.nghostzones) init pass traversed)
+   * and the flux box (exactly what loop_mixpn_device traversed; see
+   * calc_mixpn_box). */
+  vect<vect<int, dim>, dim> zmin, zmax;
+  grid.box_all<0, 1, 1>(grid.nghostzones, zmin[0], zmax[0]);
+  grid.box_all<1, 0, 1>(grid.nghostzones, zmin[1], zmax[1]);
+  grid.box_all<1, 1, 0>(grid.nghostzones, zmin[2], zmax[2]);
   vect<int, dim> imin0, imax0, imin1, imax1, imin2, imax2;
   calc_mixpn_box<0, 1, 1>(grid, nloop, imin0, imax0);
   calc_mixpn_box<1, 0, 1>(grid, nloop, imin1, imax1);
   calc_mixpn_box<1, 1, 0>(grid, nloop, imin2, imax2);
 
-  /* The fused sweep runs over the union of the three boxes (which contains
-   * face points of all three staggerings; the shared integer index space
-   * makes all three face grid functions addressable from one loop). The
-   * PointDesc fields the per-face computation uses -- p.I, p.DI, p.DX -- are
+  /* One fused sweep over the union of all the boxes (the shared integer
+   * index space makes all three face staggerings addressable from one loop)
+   * does the zeroing AND the flux computation: per point, first zero every
+   * direction whose init box contains the point, then compute every
+   * direction whose flux box does. This is value-identical to running the
+   * init passes before the flux passes: the flux computation never READS a
+   * zero-initialized value (its gf_theta and own-face flux reads are
+   * preceded by same-point writes), and where boxes overlap across tiles
+   * the writes are idempotent, exactly as before the fusion. Fusing saves a
+   * separate full write pass over the face grid functions (the zero and the
+   * flux value coalesce in cache) and a kernel launch. The PointDesc fields
+   * the per-face computation uses -- p.I, p.DI, p.DX -- are
    * centering-independent; the face coordinate is NOT taken from p.X but
    * computed per direction below. */
-  const vect<int, dim> fmin = min(min(imin0, imin1), imin2);
-  const vect<int, dim> fmax = max(max(imax0, imax1), imax2);
+  const vect<int, dim> fmin =
+      min(min(min(zmin[0], zmin[1]), min(zmin[2], imin0)), min(imin1, imin2));
+  const vect<int, dim> fmax =
+      max(max(max(zmax[0], zmax[1]), max(zmax[2], imax0)), max(imax1, imax2));
   vect<int, dim> bnd_min, bnd_max;
   grid.boundary_box<0, 0, 0>(grid.nghostzones, bnd_min, bnd_max);
 
@@ -1486,6 +1435,28 @@ void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
 
   grid.loop_box_device<0, 0, 0>(
       bnd_min, bnd_max, fmin, fmax, [=] CCTK_DEVICE(const PointDesc &p) {
+        // initialize to zero
+        for (int dir = 0; dir < dim; ++dir) {
+          if (all(p.I >= zmin[dir]) && all(p.I < zmax[dir])) {
+            fluxdenss(dir)(p.I) = 0;
+            fluxDEnts(dir)(p.I) = 0;
+            fluxmomxs(dir)(p.I) = 0;
+            fluxmomys(dir)(p.I) = 0;
+            fluxmomzs(dir)(p.I) = 0;
+            fluxtaus(dir)(p.I) = 0;
+            fluxDYes(dir)(p.I) = 0;
+            fluxB_j(dir)(p.I) = 0;
+            fluxB_k(dir)(p.I) = 0;
+
+            ap_face(dir)(p.I) = 0;
+            am_face(dir)(p.I) = 0;
+            vbar_j(dir)(p.I) = 0;
+            vbar_k(dir)(p.I) = 0;
+
+            gf_theta(dir)(p.I) = 1.0;
+          }
+        }
+
         if (all(p.I >= imin0) && all(p.I < imax0)) {
           constexpr vect<bool, dim> face_centred{false, true, true};
           const vect<CCTK_REAL, dim> face_X =
