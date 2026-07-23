@@ -699,10 +699,6 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   const vec<CCTK_REAL, 2> tau_rc =
       dens_h_W_rc - dens_rc + sqrtg * (B2_rc - press_plus_pmag_rc);
 
-  /* Btildes^i = sqrt(g) * B^i */
-  const vec<vec<CCTK_REAL, 2>, 3> Btildes_rc(
-      [&](int i) ARITH_INLINE { return sqrtg * Bs_rc(i); });
-
   /* Computing fluxes of conserved variables: */
 
   /* auxiliary: unit in 'dir_i' */
@@ -746,13 +742,6 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   const vec<CCTK_REAL, 2> flux_DYe(
       [&](int f) ARITH_INLINE { return DYe_rc(f) * vtilde_rc(f); });
 
-  /* electric field E_i = \tilde\epsilon_{ijk} Btilde_j * vtilde_k */
-  const vec<vec<CCTK_REAL, 2>, 3> Es_rc =
-      calc_cross_product(Btildes_rc, vtildes_rc);
-  /* flux(Btildes) = {{0, -Ez, Ey}, {Ez, 0, -Ex}, {-Ey, Ex, 0}} */
-  const vec<vec<CCTK_REAL, 2>, 3> flux_Btildes =
-      calc_cross_product(unit_dir_i, Es_rc);
-
   /* Calculate eigenvalues: */
 
   /* variable for either g^xx, g^yy or g^zz depending on the direction */
@@ -771,12 +760,6 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     fluxmomzs(dir_i)(p.I) = calcflux(lambda, moms_rc(2), flux_moms(2));
     fluxtaus(dir_i)(p.I) = calcflux(lambda, tau_rc, flux_tau);
     fluxDYes(dir_i)(p.I) = calcflux(lambda, DYe_rc, flux_DYe);
-    if constexpr (!uct) { // flux-CT only: off-diagonal induction fluxes
-      fluxB_j(dir_i)(p.I) =
-          calcflux(lambda, Btildes_rc(dir_j), flux_Btildes(dir_j));
-      fluxB_k(dir_i)(p.I) =
-          calcflux(lambda, Btildes_rc(dir_k), flux_Btildes(dir_k));
-    }
   } else {
     fluxdenss(dir_i)(p.I) = laxf(lambda, dens_rc, flux_dens);
     fluxDEnts(dir_i)(p.I) = laxf(lambda, DEnt_rc, flux_DEnt);
@@ -785,7 +768,29 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     fluxmomzs(dir_i)(p.I) = laxf(lambda, moms_rc(2), flux_moms(2));
     fluxtaus(dir_i)(p.I) = laxf(lambda, tau_rc, flux_tau);
     fluxDYes(dir_i)(p.I) = laxf(lambda, DYe_rc, flux_DYe);
-    if constexpr (!uct) { // flux-CT only: off-diagonal induction fluxes
+  }
+
+  if constexpr (!uct) {
+    // flux-CT only: off-diagonal induction fluxes. Btildes_rc / Es_rc /
+    // flux_Btildes are computed here, physically inside the compile-time
+    // CT-scheme guard, so the upwind-CT instantiation carries none of them in
+    // its live-set (not relying on DCE to prune them). Values are identical to
+    // the pre-hoist function-scope computation -> bit-identical per config.
+    /* Btildes^i = sqrt(g) * B^i */
+    const vec<vec<CCTK_REAL, 2>, 3> Btildes_rc(
+        [&](int i) ARITH_INLINE { return sqrtg * Bs_rc(i); });
+    /* electric field E_i = \tilde\epsilon_{ijk} Btilde_j * vtilde_k */
+    const vec<vec<CCTK_REAL, 2>, 3> Es_rc =
+        calc_cross_product(Btildes_rc, vtildes_rc);
+    /* flux(Btildes) = {{0, -Ez, Ey}, {Ez, 0, -Ex}, {-Ey, Ex, 0}} */
+    const vec<vec<CCTK_REAL, 2>, 3> flux_Btildes =
+        calc_cross_product(unit_dir_i, Es_rc);
+    if (!useLO || !loworder_flux) {
+      fluxB_j(dir_i)(p.I) =
+          calcflux(lambda, Btildes_rc(dir_j), flux_Btildes(dir_j));
+      fluxB_k(dir_i)(p.I) =
+          calcflux(lambda, Btildes_rc(dir_k), flux_Btildes(dir_k));
+    } else {
       fluxB_j(dir_i)(p.I) =
           laxf(lambda, Btildes_rc(dir_j), flux_Btildes(dir_j));
       fluxB_k(dir_i)(p.I) =
@@ -1084,7 +1089,17 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   }
 
 #ifdef CCTK_DEBUG
-  if (isnan(dens_rc(0)) || isnan(dens_rc(1)) || isnan(moms_rc(0)(0)) ||
+  // Recompute the flux-CT induction quantities for diagnostics only. In a
+  // production (non-CCTK_DEBUG) build these do not exist for the upwind-CT
+  // instantiation (they live inside the if constexpr(!uct) block above); here
+  // they are recomputed unconditionally so this NaN dump stays complete for
+  // both CT schemes without carrying them in the production live-set.
+  const vec<vec<CCTK_REAL, 2>, 3> Btildes_rc(
+      [&](int i) ARITH_INLINE { return sqrtg * Bs_rc(i); });
+  const vec<vec<CCTK_REAL, 2>, 3> flux_Btildes = calc_cross_product(
+      unit_dir_i, calc_cross_product(Btildes_rc, vtildes_rc));
+  bool nan_found =
+      isnan(dens_rc(0)) || isnan(dens_rc(1)) || isnan(moms_rc(0)(0)) ||
       isnan(moms_rc(0)(1)) || isnan(moms_rc(1)(0)) || isnan(moms_rc(1)(1)) ||
       isnan(moms_rc(2)(0)) || isnan(moms_rc(2)(1)) || isnan(tau_rc(0)) ||
       isnan(tau_rc(1)) || isnan(Btildes_rc(0)(0)) ||
@@ -1101,9 +1116,12 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
       isnan(flux_Btildes(2)(1)) || isnan(fluxdenss(dir_i)(p.I)) ||
       isnan(fluxmomxs(dir_i)(p.I)) || isnan(fluxmomys(dir_i)(p.I)) ||
       isnan(fluxmomzs(dir_i)(p.I)) || isnan(fluxtaus(dir_i)(p.I)) ||
-      isnan(fluxB_j(dir_i)(p.I)) || isnan(fluxB_k(dir_i)(p.I)) ||
-      rho_rc(0) < 0.0 || rho_rc(1) < 0.0 ||
-      press_rc(0) < 0.0 || press_rc(1) < 0.0) {
+      rho_rc(0) < 0.0 || rho_rc(1) < 0.0 || press_rc(0) < 0.0 ||
+      press_rc(1) < 0.0;
+  if constexpr (!uct) // fluxB GFs only have storage in the flux-CT config
+    nan_found = nan_found || isnan(fluxB_j(dir_i)(p.I)) ||
+                isnan(fluxB_k(dir_i)(p.I));
+  if (nan_found) {
     printf("cctk_iteration = %i,  dir_i = %i,  ijk = %i, %i, %i, "
            "x, y, z = %16.8e, %16.8e, %16.8e.\n",
            cctk_iteration, dir_i, p.i, p.j, p.k, p.x, p.y, p.z);
@@ -1111,8 +1129,9 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     printf("  fluxmoms  = %16.8e, %16.8e, %16.8e,\n", fluxmomxs(dir_i)(p.I),
            fluxmomys(dir_i)(p.I), fluxmomzs(dir_i)(p.I));
     printf("  fluxtaus  = %16.8e,\n", fluxtaus(dir_i)(p.I));
-    printf("  fluxBs(j,k) = %16.8e, %16.8e\n", fluxB_j(dir_i)(p.I),
-           fluxB_k(dir_i)(p.I));
+    if constexpr (!uct) // fluxB GFs only have storage in the flux-CT config
+      printf("  fluxBs(j,k) = %16.8e, %16.8e\n", fluxB_j(dir_i)(p.I),
+             fluxB_k(dir_i)(p.I));
     printf("  flux_denss = %16.8e, %16.8e,\n", flux_dens(0), flux_dens(1));
     printf("  flux_moms  = %16.8e, %16.8e, %16.8e, %16.8e, %16.8e, %16.8e,\n",
            flux_moms(0)(0), flux_moms(0)(1), flux_moms(1)(0), flux_moms(1)(1),
@@ -1452,14 +1471,16 @@ void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
             fluxmomzs(dir)(p.I) = 0;
             fluxtaus(dir)(p.I) = 0;
             fluxDYes(dir)(p.I) = 0;
-            fluxB_j(dir)(p.I) = 0;
-            fluxB_k(dir)(p.I) = 0;
-
-            ap_face(dir)(p.I) = 0;
-            am_face(dir)(p.I) = 0;
-            vbar_j(dir)(p.I) = 0;
-            vbar_k(dir)(p.I) = 0;
-
+            if constexpr (!uct) { // fluxB GFs only stored in the flux-CT config
+              fluxB_j(dir)(p.I) = 0;
+              fluxB_k(dir)(p.I) = 0;
+            }
+            if constexpr (uct) { // face GFs only stored in the upwind-CT config
+              ap_face(dir)(p.I) = 0;
+              am_face(dir)(p.I) = 0;
+              vbar_j(dir)(p.I) = 0;
+              vbar_k(dir)(p.I) = 0;
+            }
             gf_theta(dir)(p.I) = 1.0;
           }
         }
