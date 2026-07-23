@@ -1461,6 +1461,11 @@ void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
 
   grid.loop_box_device<0, 0, 0>(
       bnd_min, bnd_max, fmin, fmax, [=] CCTK_DEVICE(const PointDesc &p) {
+        // Force-capture fx here, before the if constexpr blocks below: nvcc
+        // rejects an extended __device__ lambda that first-captures a variable
+        // inside a constexpr-if, and fx's first use would otherwise be in the
+        // guarded zeroing (its unconditional use in CalcFluxAtFace comes later).
+        static_cast<void>(fx);
         // initialize to zero
         for (int dir = 0; dir < dim; ++dir) {
           if (all(p.I >= zmin[dir]) && all(p.I < zmax[dir])) {
@@ -1471,15 +1476,20 @@ void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
             fluxmomzs(dir)(p.I) = 0;
             fluxtaus(dir)(p.I) = 0;
             fluxDYes(dir)(p.I) = 0;
+            // Zero the CT-scheme GFs through fx (already captured by the
+            // CalcFluxAtFace calls below) rather than the local vec's: nvcc
+            // forbids an extended __device__ lambda from first-capturing a
+            // variable inside an if constexpr, and these are referenced only
+            // in the guarded branches.
             if constexpr (!uct) { // fluxB GFs only stored in the flux-CT config
-              fluxB_j(dir)(p.I) = 0;
-              fluxB_k(dir)(p.I) = 0;
+              fx.fluxB_j(dir)(p.I) = 0;
+              fx.fluxB_k(dir)(p.I) = 0;
             }
             if constexpr (uct) { // face GFs only stored in the upwind-CT config
-              ap_face(dir)(p.I) = 0;
-              am_face(dir)(p.I) = 0;
-              vbar_j(dir)(p.I) = 0;
-              vbar_k(dir)(p.I) = 0;
+              fx.ap_face(dir)(p.I) = 0;
+              fx.am_face(dir)(p.I) = 0;
+              fx.vbar_j(dir)(p.I) = 0;
+              fx.vbar_k(dir)(p.I) = 0;
             }
             gf_theta(dir)(p.I) = 1.0;
           }

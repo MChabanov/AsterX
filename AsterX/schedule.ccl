@@ -12,8 +12,20 @@ STORAGE: flux_x flux_y flux_z
 STORAGE: dB dBx_stag dBy_stag dBz_stag
 STORAGE: G Fbeta Fx_stag Fy_stag Fz_stag
 STORAGE: Ex Ey Ez
-STORAGE: vbar_xface vbar_yface vbar_zface
-STORAGE: a_xface a_yface a_zface
+
+# CT-scheme-dependent storage: upwind-CT uses the face speed / drift-velocity
+# GFs; flux-CT uses the off-diagonal B-fluxes. Each configuration allocates only
+# its own set; the other is unused and never accessed (guarded by if constexpr
+# in CalcFluxAll / CalcFluxAtFace).
+if (use_uct)
+{
+  STORAGE: vbar_xface vbar_yface vbar_zface
+  STORAGE: a_xface a_yface a_zface
+}
+if (!use_uct)
+{
+  STORAGE: fluxBs_x fluxBs_y fluxBs_z
+}
 
 STORAGE: con2prim_flag diagnostics
 STORAGE: saved_prims
@@ -294,6 +306,13 @@ SCHEDULE GROUP AsterX_RHSGroup IN ODESolvers_RHS
 {
 } "Calculate AsterX RHS"
 
+# AsterX_Fluxes is scheduled once per CT scheme: the READS and the hydro-flux /
+# theta WRITES are identical, only the CT-scheme-specific WRITES differ (the
+# upwind-CT face GFs vs. the flux-CT off-diagonal B-fluxes). The two blocks are
+# mutually exclusive; declaring WRITES only for the config's stored GFs keeps
+# CarpetX's storage/validity checks consistent with the conditional STORAGE.
+if (use_uct)
+{
 SCHEDULE AsterX_Fluxes IN AsterX_RHSGroup
 {
   LANG: C
@@ -314,7 +333,32 @@ SCHEDULE AsterX_Fluxes IN AsterX_RHSGroup
   WRITES: theta_x(everywhere) theta_y(everywhere) theta_z(everywhere)
   WRITES: vbar_xface(everywhere) vbar_yface(everywhere) vbar_zface(everywhere)
   WRITES: a_xface(everywhere) a_yface(everywhere) a_zface(everywhere)
-} "Calculate the hydro fluxes"
+} "Calculate the hydro fluxes (upwind-CT)"
+}
+
+if (!use_uct)
+{
+SCHEDULE AsterX_Fluxes IN AsterX_RHSGroup
+{
+  LANG: C
+  READS: ADMBaseX::metric(everywhere)
+  READS: ADMBaseX::lapse(everywhere)
+  READS: ADMBaseX::shift(everywhere)
+  READS: HydroBaseX::rho(everywhere) HydroBaseX::vel(everywhere) HydroBaseX::press(everywhere) HydroBaseX::eps(everywhere)
+  READS: HydroBaseX::temperature(everywhere) HydroBaseX::Ye(everywhere)
+  READS: HydroBaseX::Bvec(everywhere)
+  READS: HydroBaseX::entropy(everywhere)
+  READS: dBx_stag(everywhere) dBy_stag(everywhere) dBz_stag(everywhere)
+  READS: zvec_x(everywhere) zvec_y(everywhere) zvec_z(everywhere)
+  READS: svec_x(everywhere) svec_y(everywhere) svec_z(everywhere)
+  READS: Avec_x(everywhere) Avec_y(everywhere) Avec_z(everywhere) Psi(everywhere)
+  READS: cons_vector(everywhere)
+  READS: LOflag(everywhere)
+  WRITES: flux_x(everywhere) flux_y(everywhere) flux_z(everywhere)
+  WRITES: theta_x(everywhere) theta_y(everywhere) theta_z(everywhere)
+  WRITES: fluxBs_x(everywhere) fluxBs_y(everywhere) fluxBs_z(everywhere)
+} "Calculate the hydro fluxes (flux-CT)"
+}
 
 if(!use_subcycling) {
 SCHEDULE AsterX_RestrictFluxes IN AsterX_RHSGroup AFTER AsterX_Fluxes BEFORE AsterX_RHS
@@ -324,6 +368,12 @@ SCHEDULE AsterX_RestrictFluxes IN AsterX_RHSGroup AFTER AsterX_Fluxes BEFORE Ast
 } "Apply CarpetX boundary conditions on flux variables"
 }
 
+# Like AsterX_Fluxes, scheduled once per CT scheme. The electric field is built
+# from the upwind-CT face GFs (vbar/a) or the flux-CT off-diagonal B-fluxes
+# (fluxBs), never both; declare READS only for the config's stored inputs. The
+# hydro flux_x/y/z groups are NOT read here (only in AsterX_RHS).
+if (use_uct)
+{
 SCHEDULE AsterX_CalcAuxTermsForAvecPsiRHS IN AsterX_RHSGroup AFTER AsterX_Fluxes BEFORE AsterX_SourceTerms
 {
   LANG: C
@@ -331,7 +381,6 @@ SCHEDULE AsterX_CalcAuxTermsForAvecPsiRHS IN AsterX_RHSGroup AFTER AsterX_Fluxes
   READS: ADMBaseX::lapse(everywhere)
   READS: ADMBaseX::shift(everywhere)
   READS: Avec_x(everywhere) Avec_y(everywhere) Avec_z(everywhere) Psi(everywhere)
-  READS: flux_x(everywhere) flux_y(everywhere) flux_z(everywhere)
   READS: HydroBaseX::vel(everywhere) HydroBaseX::press(everywhere)
   READS: dBx_stag(everywhere) dBy_stag(everywhere) dBz_stag(everywhere)
   READS: vbar_xface(everywhere) vbar_yface(everywhere) vbar_zface(everywhere)
@@ -341,7 +390,28 @@ SCHEDULE AsterX_CalcAuxTermsForAvecPsiRHS IN AsterX_RHSGroup AFTER AsterX_Fluxes
   WRITES: G(everywhere)
   WRITES: Fbeta(everywhere)
   WRITES: Fx_stag(everywhere) Fy_stag(everywhere) Fz_stag(everywhere)
-} "Calculate the auxiliary terms for the rhs of Avec and Psi"
+} "Calculate the auxiliary terms for the rhs of Avec and Psi (upwind-CT)"
+}
+
+if (!use_uct)
+{
+SCHEDULE AsterX_CalcAuxTermsForAvecPsiRHS IN AsterX_RHSGroup AFTER AsterX_Fluxes BEFORE AsterX_SourceTerms
+{
+  LANG: C
+  READS: ADMBaseX::metric(everywhere)
+  READS: ADMBaseX::lapse(everywhere)
+  READS: ADMBaseX::shift(everywhere)
+  READS: Avec_x(everywhere) Avec_y(everywhere) Avec_z(everywhere) Psi(everywhere)
+  READS: fluxBs_x(everywhere) fluxBs_y(everywhere) fluxBs_z(everywhere)
+  READS: HydroBaseX::vel(everywhere) HydroBaseX::press(everywhere)
+  READS: dBx_stag(everywhere) dBy_stag(everywhere) dBz_stag(everywhere)
+  READS: Fx_stag(everywhere) Fy_stag(everywhere) Fz_stag(everywhere)
+  WRITES: Ex(interior) Ey(interior) Ez(interior)
+  WRITES: G(everywhere)
+  WRITES: Fbeta(everywhere)
+  WRITES: Fx_stag(everywhere) Fy_stag(everywhere) Fz_stag(everywhere)
+} "Calculate the auxiliary terms for the rhs of Avec and Psi (flux-CT)"
+}
 
 if(!use_subcycling) {
 SCHEDULE AsterX_RestrictAuxTermsForAvecPsiRHS IN AsterX_RHSGroup AFTER AsterX_CalcAuxTermsForAvecPsiRHS BEFORE AsterX_SourceTerms

@@ -67,9 +67,19 @@ extern "C" void AsterX_ApplyOuterBCOnPrim(CCTK_ARGUMENTS) {
 }
 
 extern "C" void AsterX_RestrictFluxes(CCTK_ARGUMENTS) {
-  static const std::vector<int> restrict_groups = {
+  DECLARE_CCTK_PARAMETERS;
+
+  // The off-diagonal B-fluxes (fluxBs_x/y/z) used to live inside flux_x/y/z and
+  // were restricted with them; keep that behavior for flux-CT. Under upwind-CT
+  // they have no storage (unused), so they must not be restricted.
+  std::vector<int> restrict_groups = {
       CCTK_GroupIndex("AsterX::flux_x"), CCTK_GroupIndex("AsterX::flux_y"),
       CCTK_GroupIndex("AsterX::flux_z")};
+  if (!use_uct) {
+    restrict_groups.push_back(CCTK_GroupIndex("AsterX::fluxBs_x"));
+    restrict_groups.push_back(CCTK_GroupIndex("AsterX::fluxBs_y"));
+    restrict_groups.push_back(CCTK_GroupIndex("AsterX::fluxBs_z"));
+  }
 
   active_levels->loop_fine_to_coarse([&](const auto &leveldata) {
     if (leveldata.level < ghext->num_levels() - 1)

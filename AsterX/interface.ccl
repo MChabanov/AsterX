@@ -47,8 +47,7 @@ CCTK_REAL flux_x TYPE=gf CENTERING={vcc} TAGS='checkpoint="no"'
   fxtau
   fxDYe
   fxDEnt
-  fxBy fxBz
-} "Fluxes in x direction"
+} "Hydro fluxes in x direction"
 
 CCTK_REAL flux_y TYPE=gf CENTERING={cvc} TAGS='checkpoint="no"'
 {
@@ -57,8 +56,7 @@ CCTK_REAL flux_y TYPE=gf CENTERING={cvc} TAGS='checkpoint="no"'
   fytau
   fyDYe
   fyDEnt
-  fyBx fyBz
-} "Fluxes in y direction"
+} "Hydro fluxes in y direction"
 
 CCTK_REAL flux_z TYPE=gf CENTERING={ccv} TAGS='checkpoint="no"'
 {
@@ -67,8 +65,26 @@ CCTK_REAL flux_z TYPE=gf CENTERING={ccv} TAGS='checkpoint="no"'
   fztau
   fzDYe
   fzDEnt
+} "Hydro fluxes in z direction"
+
+# Off-diagonal magnetic-field (induction) fluxes. Split out of flux_x/y/z so
+# their storage can be gated on the CT scheme: they are consumed only by the
+# flux-CT electric field (AsterX_CalcAuxTermsForAvecPsiRHS, use_uct=no) and are
+# unused/unstored under upwind-CT. Same centering as the parent flux groups.
+CCTK_REAL fluxBs_x TYPE=gf CENTERING={vcc} TAGS='checkpoint="no"'
+{
+  fxBy fxBz
+} "Magnetic-field fluxes in x direction (flux-CT only)"
+
+CCTK_REAL fluxBs_y TYPE=gf CENTERING={cvc} TAGS='checkpoint="no"'
+{
+  fyBx fyBz
+} "Magnetic-field fluxes in y direction (flux-CT only)"
+
+CCTK_REAL fluxBs_z TYPE=gf CENTERING={ccv} TAGS='checkpoint="no"'
+{
   fzBx fzBy
-} "Fluxes in z direction"
+} "Magnetic-field fluxes in z direction (flux-CT only)"
 
 # ----- flux limiter
 
