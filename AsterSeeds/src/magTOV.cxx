@@ -52,6 +52,34 @@ extern "C" void AsterSeeds_InitializeCenteredAvec_TOV(CCTK_ARGUMENTS) {
           Avec_z_cent(p.I) = 0.0;
         });
 
+  } else if (CCTK_EQUALS(Afield_config, "external dipole UIUC")) {
+
+    /* computing cell centered vector potential components */
+    grid.loop_all<1, 1, 1>(
+        grid.nghostzones,
+        [=] CCTK_HOST(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+          const CCTK_REAL pi = 2 * acos(0.0);
+
+          CCTK_REAL x_local = p.x - dipole_x[0];
+          CCTK_REAL y_local = p.y - dipole_y[0];
+          CCTK_REAL z_local = p.z - dipole_z[0];
+          CCTK_REAL cylrad2 = x_local * x_local + y_local * y_local;
+          CCTK_REAL sphrad2 =
+              x_local * x_local + y_local * y_local + z_local * z_local;
+          CCTK_REAL r02 = r0 * r0;
+
+          // See e.g. Ruiz+ 2020, Eq. 1. Here, B0 is I0 from Eq. 1, and we
+          // have preemptively canceled out the factor of cylrad2.
+          CCTK_REAL Aphi_local =
+              pi * B0 * r02 / pow(r02 + sphrad2, 1.5) *
+              (1.0 + (15.0 * r02 * (r02 + cylrad2) /
+                      (8.0 * pow(r02 + sphrad2, 2.0))));
+
+          Avec_x_cent(p.I) = -y_local * Aphi_local;
+          Avec_y_cent(p.I) = x_local * Aphi_local;
+          Avec_z_cent(p.I) = 0.0;
+        });
+
   } else {
     CCTK_ERROR("Vector potential configuration not defined");
   }

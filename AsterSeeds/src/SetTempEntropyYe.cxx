@@ -1,44 +1,48 @@
-#include <loop.hxx>
 #include <loop_device.hxx>
 
 #include <cctk.h>
 #include <cctk_Arguments.h>
 #include <cctk_Parameters.h>
 
-#include <cstdio>
-#include <cstdbool>
-#include <cmath>
+#include <cassert>
 
 #include <setup_eos.hxx>
 
+namespace AsterSeeds {
+using namespace Loop;
 using namespace EOSX;
+
 enum class eos_3param { IdealGas, Hybrid, Tabulated };
 
 template <typename EOSType>
-void SetTemp_typeEoS(CCTK_ARGUMENTS, EOSType *eos_3p) {
+void AsterSeeds_SetTemp_typeEoS(CCTK_ARGUMENTS, EOSType *eos_3p) {
 
   DECLARE_CCTK_ARGUMENTSX_SetTemp;
   DECLARE_CCTK_PARAMETERS;
 
   grid.loop_all_device<1, 1, 1>(
       grid.nghostzones,
-      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+      [=] CCTK_DEVICE(const PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+        CCTK_REAL epsL = eps(p.I);
         temperature(p.I) =
-            eos_3p->temp_from_rho_eps_ye(rho(p.I), eps(p.I), Ye(p.I));
+            eos_3p->temp_from_rho_eps_ye(rho(p.I), epsL, Ye(p.I));
+        eps(p.I) = epsL;
       });
 }
 
 template <typename EOSType>
-void SetEntropy_typeEoS(CCTK_ARGUMENTS, EOSType *eos_3p) {
+void AsterSeeds_SetEntropy_typeEoS(CCTK_ARGUMENTS, EOSType *eos_3p) {
 
   DECLARE_CCTK_ARGUMENTSX_SetEntropy;
   DECLARE_CCTK_PARAMETERS;
 
   grid.loop_all_device<1, 1, 1>(
       grid.nghostzones,
-      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+      [=] CCTK_DEVICE(const PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+        CCTK_REAL epsL = eps(p.I);
         entropy(p.I) =
-            eos_3p->kappa_from_rho_eps_ye(rho(p.I), eps(p.I), Ye(p.I));
+            eos_3p->kappa_from_rho_eps_ye(rho(p.I), epsL, Ye(p.I));
+        eps(p.I) = epsL;
       });
 }
 
@@ -74,16 +78,16 @@ extern "C" void SetTemp(CCTK_ARGUMENTS) {
   switch (eos_3p_type) {
   case eos_3param::IdealGas: {
     auto eos_3p_ig = global_eos_3p_ig;
-    SetTemp_typeEoS(CCTK_PASS_CTOC, eos_3p_ig);
+    AsterSeeds_SetTemp_typeEoS(CCTK_PASS_CTOC, eos_3p_ig);
     break;
   }
   case eos_3param::Hybrid: {
-    if (global_eos_3p_hyb_poly) {
-      auto eos_3p_hyb = global_eos_3p_hyb_poly;
-      SetTemp_typeEoS(CCTK_PASS_CTOC, eos_3p_hyb);
-    } else if (global_eos_3p_hyb_pwpoly) {
+    if (global_eos_3p_hyb_pwpoly) {
       auto eos_3p_hyb = global_eos_3p_hyb_pwpoly;
-      SetTemp_typeEoS(CCTK_PASS_CTOC, eos_3p_hyb);
+      AsterSeeds_SetTemp_typeEoS(CCTK_PASS_CTOC, eos_3p_hyb);
+    } else if (global_eos_3p_hyb_poly) {
+      auto eos_3p_hyb = global_eos_3p_hyb_poly;
+      AsterSeeds_SetTemp_typeEoS(CCTK_PASS_CTOC, eos_3p_hyb);
     } else {
       CCTK_ERROR(
           "Hybrid EOS selected but no hybrid EOS object was initialized");
@@ -92,7 +96,7 @@ extern "C" void SetTemp(CCTK_ARGUMENTS) {
   }
   case eos_3param::Tabulated: {
     auto eos_3p_tab3d = global_eos_3p_tab3d;
-    SetTemp_typeEoS(CCTK_PASS_CTOC, eos_3p_tab3d);
+    AsterSeeds_SetTemp_typeEoS(CCTK_PASS_CTOC, eos_3p_tab3d);
     break;
   }
   default:
@@ -121,16 +125,16 @@ extern "C" void SetEntropy(CCTK_ARGUMENTS) {
   switch (eos_3p_type) {
   case eos_3param::IdealGas: {
     auto eos_3p_ig = global_eos_3p_ig;
-    SetEntropy_typeEoS(CCTK_PASS_CTOC, eos_3p_ig);
+    AsterSeeds_SetEntropy_typeEoS(CCTK_PASS_CTOC, eos_3p_ig);
     break;
   }
   case eos_3param::Hybrid: {
-    if (global_eos_3p_hyb_poly) {
-      auto eos_3p_hyb = global_eos_3p_hyb_poly;
-      SetEntropy_typeEoS(CCTK_PASS_CTOC, eos_3p_hyb);
-    } else if (global_eos_3p_hyb_pwpoly) {
+    if (global_eos_3p_hyb_pwpoly) {
       auto eos_3p_hyb = global_eos_3p_hyb_pwpoly;
-      SetEntropy_typeEoS(CCTK_PASS_CTOC, eos_3p_hyb);
+      AsterSeeds_SetEntropy_typeEoS(CCTK_PASS_CTOC, eos_3p_hyb);
+    } else if (global_eos_3p_hyb_poly) {
+      auto eos_3p_hyb = global_eos_3p_hyb_poly;
+      AsterSeeds_SetEntropy_typeEoS(CCTK_PASS_CTOC, eos_3p_hyb);
     } else {
       CCTK_ERROR(
           "Hybrid EOS selected but no hybrid EOS object was initialized");
@@ -139,10 +143,12 @@ extern "C" void SetEntropy(CCTK_ARGUMENTS) {
   }
   case eos_3param::Tabulated: {
     auto eos_3p_tab3d = global_eos_3p_tab3d;
-    SetEntropy_typeEoS(CCTK_PASS_CTOC, eos_3p_tab3d);
+    AsterSeeds_SetEntropy_typeEoS(CCTK_PASS_CTOC, eos_3p_tab3d);
     break;
   }
   default:
     assert(0);
   }
 }
+
+} // namespace AsterSeeds
