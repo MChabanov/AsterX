@@ -220,17 +220,33 @@ const auto reconstruct_loworder =
           gf_vel_dir_i, reconstruct_params);
     };
 
+// PROBE (Step 2a -- eigenvalue collapse): the numerical-flux solvers need only
+// the global wavespeed bounds charmax = max(0, all eigenvalues) and
+// charmin = min(0, all eigenvalues), NOT the full (degenerate) lambda. Passing
+// those two scalars is bit-identical to the old laxf/hlle (max/min/fabs are
+// exact reductions) and lets lambda die right after it is computed instead of
+// staying live to the UCT block.
+const auto laxf_cc =
+    [=] CCTK_DEVICE(CCTK_REAL charmax, CCTK_REAL charmin, vec<CCTK_REAL, 2> var,
+                    vec<CCTK_REAL, 2> flux) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+      // c = max(0, |all eigenvalues|) = max(charmax, -charmin)
+      const CCTK_REAL c = fmax(charmax, -charmin);
+      return 0.5 * ((flux(0) + flux(1)) - c * (var(1) - var(0)));
+    };
 const auto calcflux =
-    [=] CCTK_DEVICE(vec<vec<CCTK_REAL, 4>, 2> lam, vec<CCTK_REAL, 2> var,
+    [=] CCTK_DEVICE(CCTK_REAL charmax, CCTK_REAL charmin, vec<CCTK_REAL, 2> var,
                     vec<CCTK_REAL, 2> flux) CCTK_ATTRIBUTE_ALWAYS_INLINE {
       CCTK_REAL flx;
       switch (fluxtype) {
       case flux_t::LxF: {
-        flx = laxf(lam, var, flux);
+        flx = laxf_cc(charmax, charmin, var, flux);
         break;
       }
       case flux_t::HLLE: {
-        flx = hlle(lam, var, flux);
+        // charpm = charmax - charmin
+        flx = (charmax * flux(0) - charmin * flux(1) +
+               charmax * charmin * (var(1) - var(0))) /
+              (charmax - charmin);
         break;
       }
       default:
@@ -746,28 +762,37 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
 
   /* variable for either g^xx, g^yy or g^zz depending on the direction */
   const CCTK_REAL u_avg = calc_inv(g_avg, detg_avg)(dir_i, dir_i);
-  /* eigenvalues */
-  vec<vec<CCTK_REAL, 4>, 2> lambda =
+  /* eigenvalues -- collapsed immediately to the only wavespeed bounds any
+   * consumer needs (charmax/charmin); the full lambda_tmp dies here instead of
+   * living all the way to the UCT block. fmax/fmin reductions match the old
+   * hlle/laxf/maxspeeds_from_lambdas exactly -> bit-identical. */
+  const vec<vec<CCTK_REAL, 4>, 2> lambda_tmp =
       eigenvalues(alp_avg, beta_avg, u_avg, vel_rc, rho_rc, cs2_rc,
                   w_lorentz_rc, h_rc, bsq_rc);
+  CCTK_REAL charmax = 0, charmin = 0;
+  for (int s = 0; s < 2; ++s)
+    for (int m = 0; m < 4; ++m) {
+      charmax = fmax(charmax, lambda_tmp(s)(m));
+      charmin = fmin(charmin, lambda_tmp(s)(m));
+    }
 
   /* Calculate numerical fluxes */
   if (!useLO || !loworder_flux) {
-    fluxdenss(dir_i)(p.I) = calcflux(lambda, dens_rc, flux_dens);
-    fluxDEnts(dir_i)(p.I) = calcflux(lambda, DEnt_rc, flux_DEnt);
-    fluxmomxs(dir_i)(p.I) = calcflux(lambda, moms_rc(0), flux_moms(0));
-    fluxmomys(dir_i)(p.I) = calcflux(lambda, moms_rc(1), flux_moms(1));
-    fluxmomzs(dir_i)(p.I) = calcflux(lambda, moms_rc(2), flux_moms(2));
-    fluxtaus(dir_i)(p.I) = calcflux(lambda, tau_rc, flux_tau);
-    fluxDYes(dir_i)(p.I) = calcflux(lambda, DYe_rc, flux_DYe);
+    fluxdenss(dir_i)(p.I) = calcflux(charmax, charmin, dens_rc, flux_dens);
+    fluxDEnts(dir_i)(p.I) = calcflux(charmax, charmin, DEnt_rc, flux_DEnt);
+    fluxmomxs(dir_i)(p.I) = calcflux(charmax, charmin, moms_rc(0), flux_moms(0));
+    fluxmomys(dir_i)(p.I) = calcflux(charmax, charmin, moms_rc(1), flux_moms(1));
+    fluxmomzs(dir_i)(p.I) = calcflux(charmax, charmin, moms_rc(2), flux_moms(2));
+    fluxtaus(dir_i)(p.I) = calcflux(charmax, charmin, tau_rc, flux_tau);
+    fluxDYes(dir_i)(p.I) = calcflux(charmax, charmin, DYe_rc, flux_DYe);
   } else {
-    fluxdenss(dir_i)(p.I) = laxf(lambda, dens_rc, flux_dens);
-    fluxDEnts(dir_i)(p.I) = laxf(lambda, DEnt_rc, flux_DEnt);
-    fluxmomxs(dir_i)(p.I) = laxf(lambda, moms_rc(0), flux_moms(0));
-    fluxmomys(dir_i)(p.I) = laxf(lambda, moms_rc(1), flux_moms(1));
-    fluxmomzs(dir_i)(p.I) = laxf(lambda, moms_rc(2), flux_moms(2));
-    fluxtaus(dir_i)(p.I) = laxf(lambda, tau_rc, flux_tau);
-    fluxDYes(dir_i)(p.I) = laxf(lambda, DYe_rc, flux_DYe);
+    fluxdenss(dir_i)(p.I) = laxf_cc(charmax, charmin, dens_rc, flux_dens);
+    fluxDEnts(dir_i)(p.I) = laxf_cc(charmax, charmin, DEnt_rc, flux_DEnt);
+    fluxmomxs(dir_i)(p.I) = laxf_cc(charmax, charmin, moms_rc(0), flux_moms(0));
+    fluxmomys(dir_i)(p.I) = laxf_cc(charmax, charmin, moms_rc(1), flux_moms(1));
+    fluxmomzs(dir_i)(p.I) = laxf_cc(charmax, charmin, moms_rc(2), flux_moms(2));
+    fluxtaus(dir_i)(p.I) = laxf_cc(charmax, charmin, tau_rc, flux_tau);
+    fluxDYes(dir_i)(p.I) = laxf_cc(charmax, charmin, DYe_rc, flux_DYe);
   }
 
   if constexpr (!uct) {
@@ -787,14 +812,14 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
         calc_cross_product(unit_dir_i, Es_rc);
     if (!useLO || !loworder_flux) {
       fluxB_j(dir_i)(p.I) =
-          calcflux(lambda, Btildes_rc(dir_j), flux_Btildes(dir_j));
+          calcflux(charmax, charmin, Btildes_rc(dir_j), flux_Btildes(dir_j));
       fluxB_k(dir_i)(p.I) =
-          calcflux(lambda, Btildes_rc(dir_k), flux_Btildes(dir_k));
+          calcflux(charmax, charmin, Btildes_rc(dir_k), flux_Btildes(dir_k));
     } else {
       fluxB_j(dir_i)(p.I) =
-          laxf(lambda, Btildes_rc(dir_j), flux_Btildes(dir_j));
+          laxf_cc(charmax, charmin, Btildes_rc(dir_j), flux_Btildes(dir_j));
       fluxB_k(dir_i)(p.I) =
-          laxf(lambda, Btildes_rc(dir_k), flux_Btildes(dir_k));
+          laxf_cc(charmax, charmin, Btildes_rc(dir_k), flux_Btildes(dir_k));
     }
   }
 
@@ -1153,10 +1178,7 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     printf("  Bts_rc  = %16.8e, %16.8e, %16.8e, %16.8e, %16.8e, %16.8e,\n",
            Btildes_rc(0)(0), Btildes_rc(0)(1), Btildes_rc(1)(0),
            Btildes_rc(1)(1), Btildes_rc(2)(0), Btildes_rc(2)(1));
-    printf("  lam = %16.8e, %16.8e, %16.8e, %16.8e,\n"
-           "        %16.8e, %16.8e, %16.8e, %16.8e.\n",
-           lambda(0)(0), lambda(0)(1), lambda(0)(2), lambda(0)(3),
-           lambda(1)(0), lambda(1)(1), lambda(1)(2), lambda(1)(3));
+    printf("  charmax = %16.8e, charmin = %16.8e\n", charmax, charmin);
     printf("  alp_avg = %16.8e, beta_avg = %16.8e, u_avg = %16.8e \n",
            alp_avg, beta_avg, u_avg);
     printf("  vel_rc  = %16.8e, %16.8e \n", vel_rc(0), vel_rc(1));
@@ -1199,8 +1221,10 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   /* Begin code for upwindCT */
 
   if constexpr (uct) { // upwind-CT only: face speeds and drift velocities
-    CCTK_REAL ap, am;
-    maxspeeds_from_lambdas(lambda, ap, am);
+    // maxspeeds_from_lambdas gives ap = max(0, lmax) = charmax and
+    // am = max(0, -lmin) = -charmin, so reuse the collapsed bounds directly.
+    const CCTK_REAL ap = charmax;
+    const CCTK_REAL am = -charmin;
 
     ap_face(dir_i)(p.I) = ap;
     am_face(dir_i)(p.I) = am;
