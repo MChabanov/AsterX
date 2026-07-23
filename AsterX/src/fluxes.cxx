@@ -135,7 +135,7 @@ template <typename EOSType> struct FluxContext {
  * (instead of reading p.X) so that this function does not depend on the
  * centering of the calling loop. p is otherwise used for indexing only:
  * p.I, p.DI and p.DX are centering-independent. */
-template <int dir_i, bool uct, typename EOSType>
+template <int dir_i, bool uct, bool pplim, typename EOSType>
 inline CCTK_ATTRIBUTE_ALWAYS_INLINE CCTK_DEVICE CCTK_HOST void
 CalcFluxAtFace(const FluxContext<EOSType> &fx, const PointDesc &p,
                const vect<CCTK_REAL, dim> &face_X) {
@@ -829,6 +829,13 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   // the cell is reset to atmosphere after the evolution step, making
   // debugging difficult. At face Ip, Ip refers to the right cell and Im
   // refers to the left.
+  // The entire PP-limiter block is gated at compile time on the CT-independent
+  // `pplim` template parameter (production runs use_pplim=no). For the
+  // use_pplim=no instantiation the whole `_ppl` recomputation live-set compiles
+  // out, shedding its register/AGPR pressure. Bit-identical per config: the
+  // dispatch keys the template on the runtime use_pplim, so `pplim` true <=>
+  // use_pplim true, matching the old runtime `if (use_pplim && !ppl_atmo)`.
+  if constexpr (pplim) {
   const auto Ip = p.I;
   const auto Im = p.I - p.DI[dir_i];
 
@@ -836,6 +843,9 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   const bool ppl_atmo = ((rho_ppl(0) <= rho_atm(0) * (1 + atmo_tol)) &&
                          (rho_ppl(1) <= rho_atm(1) * (1 + atmo_tol)));
 
+  // `use_pplim` here is a guaranteed-true redundant term inside the pplim
+  // guard (dispatch keys the template on it), kept so this condition is
+  // byte-identical to the pre-template code and `use_pplim` stays referenced.
   if (use_pplim && !ppl_atmo) {
 
     /* BEGIN REPEATED RECONSTRUCTION CODE */
@@ -1112,6 +1122,12 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   } else {
     gf_theta(dir_i)(p.I) = 1.0;
   }
+  }
+  // use_pplim=no: the PP-limiter block (and its theta write) is compiled out.
+  // theta_x/y/z have no storage in that config (see schedule.ccl); theta is
+  // identically 1.0 and its two consumers -- the upwind-CT drift blend below
+  // and the rhs theta_tot diagnostic -- use that constant directly, so there is
+  // nothing to write here.
 
 #ifdef CCTK_DEBUG
   // Recompute the flux-CT induction quantities for diagnostics only. In a
@@ -1236,7 +1252,15 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     const CCTK_REAL vj_face = avg_upwind(vjL, vjR, ap, am);
     const CCTK_REAL vk_face = avg_upwind(vkL, vkR, ap, am);
 
-    const CCTK_REAL theta_uct = gf_theta(dir_i)(p.I);
+    // theta_x/y/z are stored only when use_pplim (see schedule.ccl); with the
+    // limiter off theta is identically 1.0, so use that constant and never
+    // touch the (unstored) GF. For use_pplim=yes this reads the same value as
+    // before -> bit-identical per config.
+    CCTK_REAL theta_uct;
+    if constexpr (pplim)
+      theta_uct = gf_theta(dir_i)(p.I);
+    else
+      theta_uct = 1.0;
     vbar_j(dir_i)(p.I) =
         theta_uct * vj_face +
         (1.0 - theta_uct) * 0.5 *
@@ -1278,7 +1302,7 @@ static void calc_mixpn_box(const GridDescBaseDevice &grid, const int ord,
 // three times, and one kernel launches instead of three. The set of faces
 // computed, and the arithmetic per face, are identical to the per-direction
 // sweeps (golden-master verified).
-template <bool uct, typename EOSType>
+template <bool uct, bool pplim, typename EOSType>
 void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
                  const reconstruction_t reconstruction,
                  const reconstruction_t reconstruction_LO,
@@ -1515,7 +1539,8 @@ void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
               fx.vbar_j(dir)(p.I) = 0;
               fx.vbar_k(dir)(p.I) = 0;
             }
-            gf_theta(dir)(p.I) = 1.0;
+            if constexpr (pplim) // theta GFs only stored with the PP limiter
+              fx.gf_theta(dir)(p.I) = 1.0;
           }
         }
 
@@ -1523,19 +1548,19 @@ void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
           constexpr vect<bool, dim> face_centred{false, true, true};
           const vect<CCTK_REAL, dim> face_X =
               x0 + (lbnd + p.I - vect<CCTK_REAL, dim>(!face_centred) / 2) * dx;
-          CalcFluxAtFace<0, uct>(fx, p, face_X);
+          CalcFluxAtFace<0, uct, pplim>(fx, p, face_X);
         }
         if (all(p.I >= imin1) && all(p.I < imax1)) {
           constexpr vect<bool, dim> face_centred{true, false, true};
           const vect<CCTK_REAL, dim> face_X =
               x0 + (lbnd + p.I - vect<CCTK_REAL, dim>(!face_centred) / 2) * dx;
-          CalcFluxAtFace<1, uct>(fx, p, face_X);
+          CalcFluxAtFace<1, uct, pplim>(fx, p, face_X);
         }
         if (all(p.I >= imin2) && all(p.I < imax2)) {
           constexpr vect<bool, dim> face_centred{true, true, false};
           const vect<CCTK_REAL, dim> face_X =
               x0 + (lbnd + p.I - vect<CCTK_REAL, dim>(!face_centred) / 2) * dx;
-          CalcFluxAtFace<2, uct>(fx, p, face_X);
+          CalcFluxAtFace<2, uct, pplim>(fx, p, face_X);
         }
       });
 }
@@ -1638,14 +1663,15 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
   // face speeds/drift velocities). Dispatch the runtime use_uct flag to the two
   // instantiations via a single generic lambda. Reading use_uct per call
   // respects its STEERABLE=always semantics.
-  const auto run_all = [&](auto UCT) {
+  const auto run_all = [&](auto UCT, auto PPLIM) {
     constexpr bool uct = decltype(UCT)::value;
+    constexpr bool pplim = decltype(PPLIM)::value;
     switch (eos_3p_type) {
     case eos_3param::IdealGas: {
       // Get local eos object
       auto eos_3p_ig = global_eos_3p_ig;
 
-      CalcFluxAll<uct>(cctkGH, eos_3p_ig, rec_var, reconstruction,
+      CalcFluxAll<uct, pplim>(cctkGH, eos_3p_ig, rec_var, reconstruction,
                        reconstruction_LO, reconstruct_params, fluxtype);
       break;
     }
@@ -1655,13 +1681,13 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
       if (global_eos_3p_hyb_pwpoly) {
         auto eos_3p_hyb = global_eos_3p_hyb_pwpoly;
 
-        CalcFluxAll<uct>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
+        CalcFluxAll<uct, pplim>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
                          reconstruction_LO, reconstruct_params, fluxtype);
 
       } else if (global_eos_3p_hyb_poly) {
         auto eos_3p_hyb = global_eos_3p_hyb_poly;
 
-        CalcFluxAll<uct>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
+        CalcFluxAll<uct, pplim>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
                          reconstruction_LO, reconstruct_params, fluxtype);
 
       } else {
@@ -1675,7 +1701,7 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
       // Get local eos object
       auto eos_3p_tab3d = global_eos_3p_tab3d;
 
-      CalcFluxAll<uct>(cctkGH, eos_3p_tab3d, rec_var, reconstruction,
+      CalcFluxAll<uct, pplim>(cctkGH, eos_3p_tab3d, rec_var, reconstruction,
                        reconstruction_LO, reconstruct_params, fluxtype);
       break;
     }
@@ -1684,10 +1710,20 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
     }
   };
 
-  if (use_uct)
-    run_all(std::true_type{});
-  else
-    run_all(std::false_type{});
+  // Dispatch both compile-time flags (use_uct, use_pplim) from their runtime
+  // parameters. Reading them per call respects their STEERABLE=always
+  // semantics. 2 (uct) x 2 (pplim) x EOS instantiations of CalcFluxAll.
+  if (use_uct) {
+    if (use_pplim)
+      run_all(std::true_type{}, std::true_type{});
+    else
+      run_all(std::true_type{}, std::false_type{});
+  } else {
+    if (use_pplim)
+      run_all(std::false_type{}, std::true_type{});
+    else
+      run_all(std::false_type{}, std::false_type{});
+  }
 }
 
 template <int i, bool use_uct>

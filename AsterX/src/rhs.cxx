@@ -105,7 +105,11 @@ void CalcRHSofPsi(CCTK_ARGUMENTS, const vector_potential_gauge_t gauge,
   }
 }
 
-extern "C" void AsterX_RHS(CCTK_ARGUMENTS) {
+// Templated on the PP limiter so the theta_tot diagnostic (its only consumer of
+// theta_x/y/z) can be compiled out for use_pplim=no, where theta_x/y/z have no
+// storage (schedule.ccl) and theta is identically 1.0. Dispatched from the
+// extern "C" entry below on the runtime use_pplim, mirroring CalcE_impl.
+template <bool pplim> static void AsterX_RHS_impl(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_AsterX_RHS;
   DECLARE_CCTK_PARAMETERS;
 
@@ -140,6 +144,17 @@ extern "C" void AsterX_RHS(CCTK_ARGUMENTS) {
   grid.loop_int_device<1, 1, 1>(
       grid.nghostzones,
       [=] CCTK_DEVICE(const PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+        // Force-capture theta_x/y/z before the constexpr-if below: nvcc forbids
+        // an extended __device__ lambda from first-capturing a variable inside
+        // an if constexpr. They are only read in the (pplim) theta_tot
+        // diagnostic; for use_pplim=no they have no storage, but naming the
+        // accessor here captures only the (unused) descriptor and never
+        // dereferences it -- the same idiom as static_cast<void>(fx) in
+        // fluxes.cxx's fused sweep.
+        static_cast<void>(theta_x);
+        static_cast<void>(theta_y);
+        static_cast<void>(theta_z);
+
         densrhs(p.I) += calcupdate_hydro(gf_fdens, p);
         DEntrhs(p.I) += calcupdate_hydro(gf_fDEnt, p);
         momxrhs(p.I) += calcupdate_hydro(gf_fmomx, p);
@@ -148,13 +163,16 @@ extern "C" void AsterX_RHS(CCTK_ARGUMENTS) {
         taurhs(p.I) += calcupdate_hydro(gf_ftau, p);
         DYe_rhs(p.I) += calcupdate_hydro(gf_fDYe, p);
 
-        // Diagnostic only, save min(theta)
+        // Diagnostic only, save min(theta). theta_x/y/z are stored only when
+        // the PP limiter is active (schedule.ccl); with it off theta is
+        // identically 1.0, so report that constant and compile out the GF reads.
         theta_tot(p.I) = 1.0;
-        for (int ii = 0; ii < 3; ii++)
-          theta_tot(p.I) =
-              min({theta_tot(p.I), theta_x(p.I), theta_x(p.I + p.DI[ii]),
-                   theta_y(p.I), theta_y(p.I + p.DI[ii]), theta_z(p.I),
-                   theta_z(p.I + p.DI[ii])});
+        if constexpr (pplim)
+          for (int ii = 0; ii < 3; ii++)
+            theta_tot(p.I) =
+                min({theta_tot(p.I), theta_x(p.I), theta_x(p.I + p.DI[ii]),
+                     theta_y(p.I), theta_y(p.I + p.DI[ii]), theta_z(p.I),
+                     theta_z(p.I + p.DI[ii])});
 
 #ifdef CCTK_DEBUG
         if (isnan(densrhs(p.I))) {
@@ -173,6 +191,18 @@ extern "C" void AsterX_RHS(CCTK_ARGUMENTS) {
   CalcRHSofAvec<2>(CCTK_PASS_CTOC, gauge, mag_correction_order);
 
   CalcRHSofPsi(CCTK_PASS_CTOC, gauge, lorenz_damp_fac);
+}
+
+extern "C" void AsterX_RHS(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTSX_AsterX_RHS;
+  DECLARE_CCTK_PARAMETERS;
+  // Dispatch the runtime use_pplim to the compile-time instantiation (respects
+  // its STEERABLE=always semantics); the schedule.ccl READS of theta_x/y/z are
+  // gated on the same flag so only the use_pplim=yes build reads them.
+  if (use_pplim)
+    AsterX_RHS_impl<true>(CCTK_PASS_CTOC);
+  else
+    AsterX_RHS_impl<false>(CCTK_PASS_CTOC);
 }
 
 extern "C" void AsterX_FreezeEvolutionRHS(CCTK_ARGUMENTS) {

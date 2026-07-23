@@ -32,7 +32,15 @@ STORAGE: saved_prims
 STORAGE: zvec svec
 STORAGE: LOflag etac
 
-STORAGE: theta_x theta_y theta_z theta_tot
+# theta_tot is a cell-centred diagnostic written every RHS step (=1 when the PP
+# limiter is off). The per-face limiters theta_x/y/z are only needed when the PP
+# limiter runs; with use_pplim=no theta is identically 1 and its consumers (the
+# upwind-CT drift blend and the theta_tot diagnostic) use that constant.
+STORAGE: theta_tot
+if (use_pplim)
+{
+  STORAGE: theta_x theta_y theta_z
+}
 
 
 if(unit_test)
@@ -306,12 +314,14 @@ SCHEDULE GROUP AsterX_RHSGroup IN ODESolvers_RHS
 {
 } "Calculate AsterX RHS"
 
-# AsterX_Fluxes is scheduled once per CT scheme: the READS and the hydro-flux /
-# theta WRITES are identical, only the CT-scheme-specific WRITES differ (the
-# upwind-CT face GFs vs. the flux-CT off-diagonal B-fluxes). The two blocks are
-# mutually exclusive; declaring WRITES only for the config's stored GFs keeps
-# CarpetX's storage/validity checks consistent with the conditional STORAGE.
-if (use_uct)
+# AsterX_Fluxes is scheduled once per (CT scheme x PP limiter) combination: the
+# READS and the hydro-flux WRITES are identical, only the config-specific WRITES
+# differ -- the CT scheme picks the upwind-CT face GFs (vbar/a) vs. the flux-CT
+# off-diagonal B-fluxes (fluxBs), and the PP limiter adds the per-face theta
+# GFs. The blocks are mutually exclusive; declaring WRITES only for the config's
+# stored GFs keeps CarpetX's storage/validity checks consistent with the
+# conditional STORAGE (see the use_uct / use_pplim STORAGE blocks above).
+if (use_uct && use_pplim)
 {
 SCHEDULE AsterX_Fluxes IN AsterX_RHSGroup
 {
@@ -333,10 +343,34 @@ SCHEDULE AsterX_Fluxes IN AsterX_RHSGroup
   WRITES: theta_x(everywhere) theta_y(everywhere) theta_z(everywhere)
   WRITES: vbar_xface(everywhere) vbar_yface(everywhere) vbar_zface(everywhere)
   WRITES: a_xface(everywhere) a_yface(everywhere) a_zface(everywhere)
+} "Calculate the hydro fluxes (upwind-CT, PP limiter)"
+}
+
+if (use_uct && !use_pplim)
+{
+SCHEDULE AsterX_Fluxes IN AsterX_RHSGroup
+{
+  LANG: C
+  READS: ADMBaseX::metric(everywhere)
+  READS: ADMBaseX::lapse(everywhere)
+  READS: ADMBaseX::shift(everywhere)
+  READS: HydroBaseX::rho(everywhere) HydroBaseX::vel(everywhere) HydroBaseX::press(everywhere) HydroBaseX::eps(everywhere)
+  READS: HydroBaseX::temperature(everywhere) HydroBaseX::Ye(everywhere)
+  READS: HydroBaseX::Bvec(everywhere)
+  READS: HydroBaseX::entropy(everywhere)
+  READS: dBx_stag(everywhere) dBy_stag(everywhere) dBz_stag(everywhere)
+  READS: zvec_x(everywhere) zvec_y(everywhere) zvec_z(everywhere)
+  READS: svec_x(everywhere) svec_y(everywhere) svec_z(everywhere)
+  READS: Avec_x(everywhere) Avec_y(everywhere) Avec_z(everywhere) Psi(everywhere)
+  READS: cons_vector(everywhere)
+  READS: LOflag(everywhere)
+  WRITES: flux_x(everywhere) flux_y(everywhere) flux_z(everywhere)
+  WRITES: vbar_xface(everywhere) vbar_yface(everywhere) vbar_zface(everywhere)
+  WRITES: a_xface(everywhere) a_yface(everywhere) a_zface(everywhere)
 } "Calculate the hydro fluxes (upwind-CT)"
 }
 
-if (!use_uct)
+if (!use_uct && use_pplim)
 {
 SCHEDULE AsterX_Fluxes IN AsterX_RHSGroup
 {
@@ -356,6 +390,29 @@ SCHEDULE AsterX_Fluxes IN AsterX_RHSGroup
   READS: LOflag(everywhere)
   WRITES: flux_x(everywhere) flux_y(everywhere) flux_z(everywhere)
   WRITES: theta_x(everywhere) theta_y(everywhere) theta_z(everywhere)
+  WRITES: fluxBs_x(everywhere) fluxBs_y(everywhere) fluxBs_z(everywhere)
+} "Calculate the hydro fluxes (flux-CT, PP limiter)"
+}
+
+if (!use_uct && !use_pplim)
+{
+SCHEDULE AsterX_Fluxes IN AsterX_RHSGroup
+{
+  LANG: C
+  READS: ADMBaseX::metric(everywhere)
+  READS: ADMBaseX::lapse(everywhere)
+  READS: ADMBaseX::shift(everywhere)
+  READS: HydroBaseX::rho(everywhere) HydroBaseX::vel(everywhere) HydroBaseX::press(everywhere) HydroBaseX::eps(everywhere)
+  READS: HydroBaseX::temperature(everywhere) HydroBaseX::Ye(everywhere)
+  READS: HydroBaseX::Bvec(everywhere)
+  READS: HydroBaseX::entropy(everywhere)
+  READS: dBx_stag(everywhere) dBy_stag(everywhere) dBz_stag(everywhere)
+  READS: zvec_x(everywhere) zvec_y(everywhere) zvec_z(everywhere)
+  READS: svec_x(everywhere) svec_y(everywhere) svec_z(everywhere)
+  READS: Avec_x(everywhere) Avec_y(everywhere) Avec_z(everywhere) Psi(everywhere)
+  READS: cons_vector(everywhere)
+  READS: LOflag(everywhere)
+  WRITES: flux_x(everywhere) flux_y(everywhere) flux_z(everywhere)
   WRITES: fluxBs_x(everywhere) fluxBs_y(everywhere) fluxBs_z(everywhere)
 } "Calculate the hydro fluxes (flux-CT)"
 }
@@ -436,6 +493,13 @@ SCHEDULE AsterX_SourceTerms IN AsterX_RHSGroup AFTER AsterX_Fluxes
   WRITES: rhs_vector(interior)
 } "Calculate the source terms and compute the RHS of the hydro equations"
 
+# AsterX_RHS is scheduled once per PP-limiter state: the per-face theta_x/y/z
+# GFs are read only for the theta_tot diagnostic, which is compiled out for
+# use_pplim=no (theta is identically 1 then, and the GFs have no storage). The
+# READS of theta_x/y/z therefore appear only in the use_pplim block, matching
+# the conditional STORAGE.
+if (use_pplim)
+{
 SCHEDULE AsterX_RHS IN AsterX_RHSGroup AFTER AsterX_SourceTerms
 {
   LANG: C
@@ -448,11 +512,32 @@ SCHEDULE AsterX_RHS IN AsterX_RHSGroup AFTER AsterX_SourceTerms
   READS: Fbeta(everywhere)
   READS: Fx_stag(everywhere) Fy_stag(everywhere) Fz_stag(everywhere)
   READS: theta_x(everywhere) theta_y(everywhere) theta_z(everywhere)
-  READS: LOflag(everywhere) 
+  READS: LOflag(everywhere)
+  WRITES: rhs_vector(interior)
+  WRITES: theta_tot(interior)
+  WRITES: Avec_x_rhs(interior) Avec_y_rhs(interior) Avec_z_rhs(interior) Psi_rhs(interior)
+} "Update the RHS of the hydro equations with the flux contributions (PP limiter)"
+}
+
+if (!use_pplim)
+{
+SCHEDULE AsterX_RHS IN AsterX_RHSGroup AFTER AsterX_SourceTerms
+{
+  LANG: C
+  READS: ADMBaseX::metric(everywhere) ADMBaseX::lapse(everywhere) ADMBaseX::shift(everywhere)
+  READS: flux_x(everywhere) flux_y(everywhere) flux_z(everywhere)
+  READS: rhs_vector(interior)
+  READS: Psi(everywhere)
+  READS: Ex(interior) Ey(interior) Ez(interior)
+  READS: G(everywhere)
+  READS: Fbeta(everywhere)
+  READS: Fx_stag(everywhere) Fy_stag(everywhere) Fz_stag(everywhere)
+  READS: LOflag(everywhere)
   WRITES: rhs_vector(interior)
   WRITES: theta_tot(interior)
   WRITES: Avec_x_rhs(interior) Avec_y_rhs(interior) Avec_z_rhs(interior) Psi_rhs(interior)
 } "Update the RHS of the hydro equations with the flux contributions"
+}
 
 
 
