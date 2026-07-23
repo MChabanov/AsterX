@@ -13,6 +13,7 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <type_traits>
 
 #include "aster_utils.hxx"
 #include "eigenvalues.hxx"
@@ -134,7 +135,7 @@ template <typename EOSType> struct FluxContext {
  * (instead of reading p.X) so that this function does not depend on the
  * centering of the calling loop. p is otherwise used for indexing only:
  * p.I, p.DI and p.DX are centering-independent. */
-template <int dir_i, typename EOSType>
+template <int dir_i, bool uct, typename EOSType>
 inline CCTK_ATTRIBUTE_ALWAYS_INLINE CCTK_DEVICE CCTK_HOST void
 CalcFluxAtFace(const FluxContext<EOSType> &fx, const PointDesc &p,
                const vect<CCTK_REAL, dim> &face_X) {
@@ -770,10 +771,12 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     fluxmomzs(dir_i)(p.I) = calcflux(lambda, moms_rc(2), flux_moms(2));
     fluxtaus(dir_i)(p.I) = calcflux(lambda, tau_rc, flux_tau);
     fluxDYes(dir_i)(p.I) = calcflux(lambda, DYe_rc, flux_DYe);
-    fluxB_j(dir_i)(p.I) =
-        calcflux(lambda, Btildes_rc(dir_j), flux_Btildes(dir_j));
-    fluxB_k(dir_i)(p.I) =
-        calcflux(lambda, Btildes_rc(dir_k), flux_Btildes(dir_k));
+    if constexpr (!uct) { // flux-CT only: off-diagonal induction fluxes
+      fluxB_j(dir_i)(p.I) =
+          calcflux(lambda, Btildes_rc(dir_j), flux_Btildes(dir_j));
+      fluxB_k(dir_i)(p.I) =
+          calcflux(lambda, Btildes_rc(dir_k), flux_Btildes(dir_k));
+    }
   } else {
     fluxdenss(dir_i)(p.I) = laxf(lambda, dens_rc, flux_dens);
     fluxDEnts(dir_i)(p.I) = laxf(lambda, DEnt_rc, flux_DEnt);
@@ -782,10 +785,12 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     fluxmomzs(dir_i)(p.I) = laxf(lambda, moms_rc(2), flux_moms(2));
     fluxtaus(dir_i)(p.I) = laxf(lambda, tau_rc, flux_tau);
     fluxDYes(dir_i)(p.I) = laxf(lambda, DYe_rc, flux_DYe);
-    fluxB_j(dir_i)(p.I) =
-        laxf(lambda, Btildes_rc(dir_j), flux_Btildes(dir_j));
-    fluxB_k(dir_i)(p.I) =
-        laxf(lambda, Btildes_rc(dir_k), flux_Btildes(dir_k));
+    if constexpr (!uct) { // flux-CT only: off-diagonal induction fluxes
+      fluxB_j(dir_i)(p.I) =
+          laxf(lambda, Btildes_rc(dir_j), flux_Btildes(dir_j));
+      fluxB_k(dir_i)(p.I) =
+          laxf(lambda, Btildes_rc(dir_k), flux_Btildes(dir_k));
+    }
   }
 
   /* Positivity Preserving Limiter */
@@ -1174,28 +1179,30 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
 
   /* Begin code for upwindCT */
 
-  CCTK_REAL ap, am;
-  maxspeeds_from_lambdas(lambda, ap, am);
+  if constexpr (uct) { // upwind-CT only: face speeds and drift velocities
+    CCTK_REAL ap, am;
+    maxspeeds_from_lambdas(lambda, ap, am);
 
-  ap_face(dir_i)(p.I) = ap;
-  am_face(dir_i)(p.I) = am;
+    ap_face(dir_i)(p.I) = ap;
+    am_face(dir_i)(p.I) = am;
 
-  const CCTK_REAL vjL = vtildes_rc(dir_j)(0);
-  const CCTK_REAL vjR = vtildes_rc(dir_j)(1);
-  const CCTK_REAL vkL = vtildes_rc(dir_k)(0);
-  const CCTK_REAL vkR = vtildes_rc(dir_k)(1);
-  const CCTK_REAL vj_face = avg_upwind(vjL, vjR, ap, am);
-  const CCTK_REAL vk_face = avg_upwind(vkL, vkR, ap, am);
+    const CCTK_REAL vjL = vtildes_rc(dir_j)(0);
+    const CCTK_REAL vjR = vtildes_rc(dir_j)(1);
+    const CCTK_REAL vkL = vtildes_rc(dir_k)(0);
+    const CCTK_REAL vkR = vtildes_rc(dir_k)(1);
+    const CCTK_REAL vj_face = avg_upwind(vjL, vjR, ap, am);
+    const CCTK_REAL vk_face = avg_upwind(vkL, vkR, ap, am);
 
-  const CCTK_REAL theta_uct = gf_theta(dir_i)(p.I);
-  vbar_j(dir_i)(p.I) =
-      theta_uct * vj_face +
-      (1.0 - theta_uct) * 0.5 *
-          (gf_vels(dir_j)(p.I) + gf_vels(dir_j)(p.I - p.DI[dir_i]));
-  vbar_k(dir_i)(p.I) =
-      theta_uct * vk_face +
-      (1.0 - theta_uct) * 0.5 *
-          (gf_vels(dir_k)(p.I) + gf_vels(dir_k)(p.I - p.DI[dir_i]));
+    const CCTK_REAL theta_uct = gf_theta(dir_i)(p.I);
+    vbar_j(dir_i)(p.I) =
+        theta_uct * vj_face +
+        (1.0 - theta_uct) * 0.5 *
+            (gf_vels(dir_j)(p.I) + gf_vels(dir_j)(p.I - p.DI[dir_i]));
+    vbar_k(dir_i)(p.I) =
+        theta_uct * vk_face +
+        (1.0 - theta_uct) * 0.5 *
+            (gf_vels(dir_k)(p.I) + gf_vels(dir_k)(p.I - p.DI[dir_i]));
+  }
 
   /* End code for upwindCT */
 }
@@ -1228,7 +1235,7 @@ static void calc_mixpn_box(const GridDescBaseDevice &grid, const int ord,
 // three times, and one kernel launches instead of three. The set of faces
 // computed, and the arithmetic per face, are identical to the per-direction
 // sweeps (golden-master verified).
-template <typename EOSType>
+template <bool uct, typename EOSType>
 void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
                  const reconstruction_t reconstruction,
                  const reconstruction_t reconstruction_LO,
@@ -1461,19 +1468,19 @@ void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
           constexpr vect<bool, dim> face_centred{false, true, true};
           const vect<CCTK_REAL, dim> face_X =
               x0 + (lbnd + p.I - vect<CCTK_REAL, dim>(!face_centred) / 2) * dx;
-          CalcFluxAtFace<0>(fx, p, face_X);
+          CalcFluxAtFace<0, uct>(fx, p, face_X);
         }
         if (all(p.I >= imin1) && all(p.I < imax1)) {
           constexpr vect<bool, dim> face_centred{true, false, true};
           const vect<CCTK_REAL, dim> face_X =
               x0 + (lbnd + p.I - vect<CCTK_REAL, dim>(!face_centred) / 2) * dx;
-          CalcFluxAtFace<1>(fx, p, face_X);
+          CalcFluxAtFace<1, uct>(fx, p, face_X);
         }
         if (all(p.I >= imin2) && all(p.I < imax2)) {
           constexpr vect<bool, dim> face_centred{true, true, false};
           const vect<CCTK_REAL, dim> face_X =
               x0 + (lbnd + p.I - vect<CCTK_REAL, dim>(!face_centred) / 2) * dx;
-          CalcFluxAtFace<2>(fx, p, face_X);
+          CalcFluxAtFace<2, uct>(fx, p, face_X);
         }
       });
 }
@@ -1570,48 +1577,62 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
     CCTK_ERROR("Unknown value for parameter \"flux_type\"");
   }
 
-  switch (eos_3p_type) {
-  case eos_3param::IdealGas: {
-    // Get local eos object
-    auto eos_3p_ig = global_eos_3p_ig;
+  // The CT scheme (use_uct) is threaded as a compile-time template parameter
+  // through CalcFluxAll/CalcFluxAtFace so that each configuration only compiles
+  // its own half of the per-face work (flux-CT induction fluxes vs. upwind-CT
+  // face speeds/drift velocities). Dispatch the runtime use_uct flag to the two
+  // instantiations via a single generic lambda. Reading use_uct per call
+  // respects its STEERABLE=always semantics.
+  const auto run_all = [&](auto UCT) {
+    constexpr bool uct = decltype(UCT)::value;
+    switch (eos_3p_type) {
+    case eos_3param::IdealGas: {
+      // Get local eos object
+      auto eos_3p_ig = global_eos_3p_ig;
 
-    CalcFluxAll(cctkGH, eos_3p_ig, rec_var, reconstruction, reconstruction_LO,
-                reconstruct_params, fluxtype);
-    break;
-  }
-  case eos_3param::Hybrid: {
-    // Note: the nested if conditions below could be inefficient.
-    // This needs to be tested, and restructured, if required.
-    if (global_eos_3p_hyb_pwpoly) {
-      auto eos_3p_hyb = global_eos_3p_hyb_pwpoly;
-
-      CalcFluxAll(cctkGH, eos_3p_hyb, rec_var, reconstruction,
-                  reconstruction_LO, reconstruct_params, fluxtype);
-
-    } else if (global_eos_3p_hyb_poly) {
-      auto eos_3p_hyb = global_eos_3p_hyb_poly;
-
-      CalcFluxAll(cctkGH, eos_3p_hyb, rec_var, reconstruction,
-                  reconstruction_LO, reconstruct_params, fluxtype);
-
-    } else {
-      CCTK_ERROR(
-          "Hybrid EOS selected but no hybrid EOS object was initialized");
+      CalcFluxAll<uct>(cctkGH, eos_3p_ig, rec_var, reconstruction,
+                       reconstruction_LO, reconstruct_params, fluxtype);
+      break;
     }
+    case eos_3param::Hybrid: {
+      // Note: the nested if conditions below could be inefficient.
+      // This needs to be tested, and restructured, if required.
+      if (global_eos_3p_hyb_pwpoly) {
+        auto eos_3p_hyb = global_eos_3p_hyb_pwpoly;
 
-    break;
-  }
-  case eos_3param::Tabulated: {
-    // Get local eos object
-    auto eos_3p_tab3d = global_eos_3p_tab3d;
+        CalcFluxAll<uct>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
+                         reconstruction_LO, reconstruct_params, fluxtype);
 
-    CalcFluxAll(cctkGH, eos_3p_tab3d, rec_var, reconstruction,
-                reconstruction_LO, reconstruct_params, fluxtype);
-    break;
-  }
-  default:
-    assert(0);
-  }
+      } else if (global_eos_3p_hyb_poly) {
+        auto eos_3p_hyb = global_eos_3p_hyb_poly;
+
+        CalcFluxAll<uct>(cctkGH, eos_3p_hyb, rec_var, reconstruction,
+                         reconstruction_LO, reconstruct_params, fluxtype);
+
+      } else {
+        CCTK_ERROR(
+            "Hybrid EOS selected but no hybrid EOS object was initialized");
+      }
+
+      break;
+    }
+    case eos_3param::Tabulated: {
+      // Get local eos object
+      auto eos_3p_tab3d = global_eos_3p_tab3d;
+
+      CalcFluxAll<uct>(cctkGH, eos_3p_tab3d, rec_var, reconstruction,
+                       reconstruction_LO, reconstruct_params, fluxtype);
+      break;
+    }
+    default:
+      assert(0);
+    }
+  };
+
+  if (use_uct)
+    run_all(std::true_type{});
+  else
+    run_all(std::false_type{});
 }
 
 template <int i, bool use_uct>
