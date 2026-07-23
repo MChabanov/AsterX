@@ -42,6 +42,28 @@ KEYWORD test_case "Name of the testcase" STEERABLE=never
 
 private:
 
+# parameters for perturbing neutron-star initial data
+
+KEYWORD ns_perturbation_mode "Neutron-star perturbation applied after hydro initial data are read" STEERABLE=never
+{
+  "none" :: "Do not perturb the neutron-star initial data"
+  "m0"   :: "Deplete pressure by ns_perturbation_strength inside the star"
+  "m1"   :: "rho -> rho * (1 + B * (x + y) / Req)"
+  "m2"   :: "rho -> rho * (1 + B * (x^2 - y^2) / Req^2)"
+} "none"
+
+CCTK_REAL ns_perturbation_strength "Fractional perturbation strength B"
+{
+  *:* :: ""
+} 0.0
+
+CCTK_REAL ns_perturbation_Req "Equatorial radius Req used for m=1 and m=2 perturbations"
+{
+  (0.0:* :: "Positive"
+} 1.0
+
+# ---------------------------------------
+
 # parameters for rotating intial data
 REAL rotate_angle_x "Rotation angle about x-axis (in units of pi)" STEERABLE=never
 {

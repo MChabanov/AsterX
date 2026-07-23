@@ -336,10 +336,10 @@ CCTK_HOST inline void eos_readtable_compose(const std::string &filename,
     }
 
     int nav = 0;
-    if (hdf5_link_exists(file, "/Composition_quadruples")) {
+    if (hdf5_link_exists(file, "/Composition_quadrupels")) {
       hid_t av_id;
       HDF5_ERROR(av_id =
-                     H5Gopen2(file, "/Composition_quadruples", H5P_DEFAULT));
+                     H5Gopen2(file, "/Composition_quadrupels", H5P_DEFAULT));
       READ_ATTR_HDF5_COMPOSE(av_id, "pointsav", &nav, H5T_NATIVE_INT);
 
       if (nav > 0) {
