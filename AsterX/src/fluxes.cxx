@@ -648,13 +648,11 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   const vec<vec<CCTK_REAL, 2>, 3> Blows_rc = calc_contraction(g_avg, Bs_rc);
   /* B^2 = B^i * B_i */
   const vec<CCTK_REAL, 2> B2_rc = calc_contraction(Bs_rc, Blows_rc);
-  /* covariant magnetic field measured by the comoving observer:
-   *  b_i = B_i/W + alpha*b^0*v_i */
-  const vec<vec<CCTK_REAL, 2>, 3> blows_rc([&](int i) ARITH_INLINE {
-    return vec<CCTK_REAL, 2>([&](int f) ARITH_INLINE {
-      return Blows_rc(i)(f) / w_lorentz_rc(f) + alp_b0_rc(f) * vlows_rc(i)(f);
-    });
-  });
+  /* covariant magnetic field measured by the comoving observer
+   *  b_i = B_i/W + alpha*b^0*v_i is NOT materialized as a full vec here: it
+   * feeds only mom_i and its flux, which are now computed flux-by-flux in a
+   * rolled loop over the momentum component (see below), so b_i is built one
+   * component at a time (blows_j) and never lives for all three at once. */
   /* b^2 = b^{\mu} * b_{\mu} */
   const vec<CCTK_REAL, 2> bsq_rc([&](int f) ARITH_INLINE {
     return (B2_rc(f) + pow2(alp_b0_rc(f))) / pow2(w_lorentz_rc(f));
@@ -702,13 +700,9 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   /* auxiliary: (pgas + pmag) */
   const vec<CCTK_REAL, 2> press_plus_pmag_rc = press_rc + 0.5 * bsq_rc;
 
-  /* mom_i = sqrt(g)*S_i = sqrt(g)((rho*h+b^2)*W^2*v_i - alpha*b^0*b_i) */
-  const vec<vec<CCTK_REAL, 2>, 3> moms_rc([&](int i) ARITH_INLINE {
-    return vec<CCTK_REAL, 2>([&](int f) ARITH_INLINE {
-      return dens_h_W_plus_sqrtg_W2b2_rc(f) * vlows_rc(i)(f) -
-             sqrtg * alp_b0_rc(f) * blows_rc(i)(f);
-    });
-  });
+  /* mom_i = sqrt(g)*S_i = sqrt(g)((rho*h+b^2)*W^2*v_i - alpha*b^0*b_i) is
+   * computed flux-by-flux in the rolled momentum loop below (moms_j), not as a
+   * full vec, so the three components never coexist. */
 
   /* tau = sqrt(g)*t =
    *  sqrt(g)((rho*h + b^2)*W^2 - (pgas+pmag) - (alpha*b^0)^2 - D) */
@@ -734,15 +728,9 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   const vec<CCTK_REAL, 2> flux_DEnt(
       [&](int f) ARITH_INLINE { return DEnt_rc(f) * vtilde_rc(f); });
 
-  /* flux(mom_j)^i = sqrt(g)*(
-   *  S_j*vtilde^i + alpha*((pgas+pmag)*delta^i_j - b_jB^i/W) ) */
-  const vec<vec<CCTK_REAL, 2>, 3> flux_moms([&](int j) ARITH_INLINE {
-    return vec<CCTK_REAL, 2>([&](int f) ARITH_INLINE {
-      return moms_rc(j)(f) * vtilde_rc(f) +
-             alp_sqrtg * (press_plus_pmag_rc(f) * unit_dir_i(j) -
-                          blows_rc(j)(f) * B_over_w_lorentz_rc(f));
-    });
-  });
+  /* flux(mom_j)^i = sqrt(g)*(S_j*vtilde^i + alpha*((pgas+pmag)*delta^i_j -
+   *  b_jB^i/W) ) is computed flux-by-flux in the rolled momentum loop below
+   * (flux_moms_j), not as a full vec. */
 
   /* flux(tau) = sqrt(g)*(
    *  t*vtilde^i + alpha*((pgas+pmag)*v^i-alpha*b0*B^i/W) ) */
@@ -776,23 +764,54 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
       charmin = fmin(charmin, lambda_tmp(s)(m));
     }
 
-  /* Calculate numerical fluxes */
+  /* Calculate numerical fluxes. The scalar (dens/DEnt/tau/DYe) fluxes are stored
+   * directly; the three momentum fluxes are computed flux-by-flux in the rolled
+   * loop below. */
   if (!useLO || !loworder_flux) {
     fluxdenss(dir_i)(p.I) = calcflux(charmax, charmin, dens_rc, flux_dens);
     fluxDEnts(dir_i)(p.I) = calcflux(charmax, charmin, DEnt_rc, flux_DEnt);
-    fluxmomxs(dir_i)(p.I) = calcflux(charmax, charmin, moms_rc(0), flux_moms(0));
-    fluxmomys(dir_i)(p.I) = calcflux(charmax, charmin, moms_rc(1), flux_moms(1));
-    fluxmomzs(dir_i)(p.I) = calcflux(charmax, charmin, moms_rc(2), flux_moms(2));
     fluxtaus(dir_i)(p.I) = calcflux(charmax, charmin, tau_rc, flux_tau);
     fluxDYes(dir_i)(p.I) = calcflux(charmax, charmin, DYe_rc, flux_DYe);
   } else {
     fluxdenss(dir_i)(p.I) = laxf_cc(charmax, charmin, dens_rc, flux_dens);
     fluxDEnts(dir_i)(p.I) = laxf_cc(charmax, charmin, DEnt_rc, flux_DEnt);
-    fluxmomxs(dir_i)(p.I) = laxf_cc(charmax, charmin, moms_rc(0), flux_moms(0));
-    fluxmomys(dir_i)(p.I) = laxf_cc(charmax, charmin, moms_rc(1), flux_moms(1));
-    fluxmomzs(dir_i)(p.I) = laxf_cc(charmax, charmin, moms_rc(2), flux_moms(2));
     fluxtaus(dir_i)(p.I) = laxf_cc(charmax, charmin, tau_rc, flux_tau);
     fluxDYes(dir_i)(p.I) = laxf_cc(charmax, charmin, DYe_rc, flux_DYe);
+  }
+
+  /* Momentum fluxes, flux-by-flux (Idea 2): serialize the momentum-component
+   * axis j so that b_j (blows_j), mom_j (moms_j) and its flux (flux_moms_j)
+   * live one component at a time instead of all three simultaneously. Each
+   * expression is copied verbatim from the old full-vec moms_rc(j)/flux_moms(j)
+   * (only i->j indexing) -> bit-identical. The loop MUST stay rolled
+   * (#pragma unroll 1) or the optimizer re-merges the live ranges and the
+   * register saving is lost. */
+#pragma unroll 1
+  for (int j = 0; j < 3; ++j) {
+    /* b_j = B_j/W + alpha*b^0*v_j (comoving covariant B, this component only) */
+    const vec<CCTK_REAL, 2> blows_j([&](int f) ARITH_INLINE {
+      return Blows_rc(j)(f) / w_lorentz_rc(f) + alp_b0_rc(f) * vlows_rc(j)(f);
+    });
+    /* mom_j = sqrt(g)*S_j = (rho*h+b^2)*W^2*v_j - sqrt(g)*alpha*b^0*b_j */
+    const vec<CCTK_REAL, 2> moms_j([&](int f) ARITH_INLINE {
+      return dens_h_W_plus_sqrtg_W2b2_rc(f) * vlows_rc(j)(f) -
+             sqrtg * alp_b0_rc(f) * blows_j(f);
+    });
+    /* flux(mom_j)^i */
+    const vec<CCTK_REAL, 2> flux_moms_j([&](int f) ARITH_INLINE {
+      return moms_j(f) * vtilde_rc(f) +
+             alp_sqrtg * (press_plus_pmag_rc(f) * unit_dir_i(j) -
+                          blows_j(f) * B_over_w_lorentz_rc(f));
+    });
+    const CCTK_REAL fmom = (!useLO || !loworder_flux)
+                               ? calcflux(charmax, charmin, moms_j, flux_moms_j)
+                               : laxf_cc(charmax, charmin, moms_j, flux_moms_j);
+    if (j == 0)
+      fluxmomxs(dir_i)(p.I) = fmom;
+    else if (j == 1)
+      fluxmomys(dir_i)(p.I) = fmom;
+    else
+      fluxmomzs(dir_i)(p.I) = fmom;
   }
 
   if constexpr (!uct) {
@@ -1139,6 +1158,27 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
       [&](int i) ARITH_INLINE { return sqrtg * Bs_rc(i); });
   const vec<vec<CCTK_REAL, 2>, 3> flux_Btildes = calc_cross_product(
       unit_dir_i, calc_cross_product(Btildes_rc, vtildes_rc));
+  // moms_rc / flux_moms (and the comoving b_i they need) are computed flux-by-
+  // flux in the rolled loop above and not kept as full vecs; recompute them here
+  // (verbatim) so the NaN dump can print all three components.
+  const vec<vec<CCTK_REAL, 2>, 3> blows_rc([&](int i) ARITH_INLINE {
+    return vec<CCTK_REAL, 2>([&](int f) ARITH_INLINE {
+      return Blows_rc(i)(f) / w_lorentz_rc(f) + alp_b0_rc(f) * vlows_rc(i)(f);
+    });
+  });
+  const vec<vec<CCTK_REAL, 2>, 3> moms_rc([&](int i) ARITH_INLINE {
+    return vec<CCTK_REAL, 2>([&](int f) ARITH_INLINE {
+      return dens_h_W_plus_sqrtg_W2b2_rc(f) * vlows_rc(i)(f) -
+             sqrtg * alp_b0_rc(f) * blows_rc(i)(f);
+    });
+  });
+  const vec<vec<CCTK_REAL, 2>, 3> flux_moms([&](int j) ARITH_INLINE {
+    return vec<CCTK_REAL, 2>([&](int f) ARITH_INLINE {
+      return moms_rc(j)(f) * vtilde_rc(f) +
+             alp_sqrtg * (press_plus_pmag_rc(f) * unit_dir_i(j) -
+                          blows_rc(j)(f) * B_over_w_lorentz_rc(f));
+    });
+  });
   bool nan_found =
       isnan(dens_rc(0)) || isnan(dens_rc(1)) || isnan(moms_rc(0)(0)) ||
       isnan(moms_rc(0)(1)) || isnan(moms_rc(1)(0)) || isnan(moms_rc(1)(1)) ||
