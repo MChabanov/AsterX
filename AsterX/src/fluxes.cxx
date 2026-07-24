@@ -640,133 +640,129 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     });
   });
 
-  /* alpha * b0 = W * B^i * v_i */
-  const vec<CCTK_REAL, 2> alp_b0_rc([&](int f) ARITH_INLINE {
-    return w_lorentz_rc(f) * calc_contraction(Bs_rc, vlows_rc)(f);
-  });
-  /* covariant magnetic field measured by the Eulerian observer */
-  const vec<vec<CCTK_REAL, 2>, 3> Blows_rc = calc_contraction(g_avg, Bs_rc);
-  /* B^2 = B^i * B_i */
-  const vec<CCTK_REAL, 2> B2_rc = calc_contraction(Bs_rc, Blows_rc);
-  /* covariant magnetic field measured by the comoving observer
-   *  b_i = B_i/W + alpha*b^0*v_i is NOT materialized as a full vec here: it
-   * feeds only mom_i and its flux, which are now computed flux-by-flux in a
-   * rolled loop over the momentum component (see below), so b_i is built one
-   * component at a time (blows_j) and never lives for all three at once. */
-  /* b^2 = b^{\mu} * b_{\mu} */
-  const vec<CCTK_REAL, 2> bsq_rc([&](int f) ARITH_INLINE {
-    return (B2_rc(f) + pow2(alp_b0_rc(f))) / pow2(w_lorentz_rc(f));
-  });
-
-  /* componets correspond to the dir_i we are considering */
+  /* Direction-dependent, side-independent pieces + the dir_i-component
+   * reconstructed vectors, hoisted before the per-side loop. */
   const CCTK_REAL beta_avg = betas_avg(dir_i);
   const vec<CCTK_REAL, 2> vel_rc{vels_rc(dir_i)};
   const vec<CCTK_REAL, 2> B_rc{Bs_rc(dir_i)};
   const vec<CCTK_REAL, 2> vtilde_rc{vtildes_rc(dir_i)};
-
-  // TODO: Compute pressure based on user-specified EOS.
-  // Currently, computing press for classical ideal gas from reconstructed
-  // vars
-
-  const vec<CCTK_REAL, 2> cs2_rc([&](int f) ARITH_INLINE {
-    return eos_3p->csnd_from_rho_temp_ye(rho_rc(f), temp_rc(f), Ye_rc(f)) *
-           eos_3p->csnd_from_rho_temp_ye(rho_rc(f), temp_rc(f), Ye_rc(f));
-  });
-
-  const vec<CCTK_REAL, 2> h_rc([&](int f) ARITH_INLINE {
-    return 1 + eps_rc(f) + press_rc(f) / rho_rc(f);
-  });
-
-  /* Computing conservatives from primitives: */
-
-  /* dens = sqrt(g) * D = sqrt(g) * (rho * W) */
-  const vec<CCTK_REAL, 2> dens_rc([&](int f) ARITH_INLINE {
-    return sqrtg * rho_rc(f) * w_lorentz_rc(f);
-  });
-
-  /* DEnt = sqrt(g) * D * s  = sqrt(g) * (rho * W) * s */
-  /*    s = entropy */
-  const vec<CCTK_REAL, 2> DEnt_rc([&](int f) ARITH_INLINE {
-    return sqrtg * rho_rc(f) * w_lorentz_rc(f) * entropy_rc(f);
-  });
-
-  /* auxiliary: dens * h * W = sqrt(g) * rho * h * W^2 */
-  const vec<CCTK_REAL, 2> dens_h_W_rc([&](int f) ARITH_INLINE {
-    return dens_rc(f) * h_rc(f) * w_lorentz_rc(f);
-  });
-  /* auxiliary: sqrt(g) * (rho*h + b^2)*W^2 */
-  const vec<CCTK_REAL, 2> dens_h_W_plus_sqrtg_W2b2_rc =
-      dens_h_W_rc + sqrtg * (pow2(alp_b0_rc) + B2_rc);
-  /* auxiliary: (pgas + pmag) */
-  const vec<CCTK_REAL, 2> press_plus_pmag_rc = press_rc + 0.5 * bsq_rc;
-
-  /* mom_i = sqrt(g)*S_i = sqrt(g)((rho*h+b^2)*W^2*v_i - alpha*b^0*b_i) is
-   * computed flux-by-flux in the rolled momentum loop below (moms_j), not as a
-   * full vec, so the three components never coexist. */
-
-  /* tau = sqrt(g)*t =
-   *  sqrt(g)((rho*h + b^2)*W^2 - (pgas+pmag) - (alpha*b^0)^2 - D) */
-  const vec<CCTK_REAL, 2> tau_rc =
-      dens_h_W_rc - dens_rc + sqrtg * (B2_rc - press_plus_pmag_rc);
-
-  /* Computing fluxes of conserved variables: */
-
   /* auxiliary: unit in 'dir_i' */
   const vec<CCTK_REAL, 3> unit_dir_i{vec<int, 3>::unit(dir_i)};
   /* auxiliary: alpha * sqrt(g) */
   const CCTK_REAL alp_sqrtg = alp_avg * sqrtg;
-  /* auxiliary: B^i / W */
-  const vec<CCTK_REAL, 2> B_over_w_lorentz_rc(
-      [&](int f) ARITH_INLINE { return B_rc(f) / w_lorentz_rc(f); });
-
-  /* flux(dens) = sqrt(g) * D * vtilde^i = sqrt(g) * rho * W * vtilde^i */
-  const vec<CCTK_REAL, 2> flux_dens(
-      [&](int f) ARITH_INLINE { return dens_rc(f) * vtilde_rc(f); });
-
-  /* flux(DEnt) = sqrt(g) * D * s * vtilde^i = sqrt(g) * rho * W * s *
-   * vtilde^i */
-  const vec<CCTK_REAL, 2> flux_DEnt(
-      [&](int f) ARITH_INLINE { return DEnt_rc(f) * vtilde_rc(f); });
-
-  /* flux(mom_j)^i = sqrt(g)*(S_j*vtilde^i + alpha*((pgas+pmag)*delta^i_j -
-   *  b_jB^i/W) ) is computed flux-by-flux in the rolled momentum loop below
-   * (flux_moms_j), not as a full vec. */
-
-  /* flux(tau) = sqrt(g)*(
-   *  t*vtilde^i + alpha*((pgas+pmag)*v^i-alpha*b0*B^i/W) ) */
-  const vec<CCTK_REAL, 2> flux_tau([&](int f) ARITH_INLINE {
-    return tau_rc(f) * vtilde_rc(f) +
-           alp_sqrtg * (press_plus_pmag_rc(f) * vel_rc(f) -
-                        alp_b0_rc(f) * B_over_w_lorentz_rc(f));
-  });
-
-  /* flux(DYe) = sqrt(g) * (D * Ye * vtilde^i) */
-  const vec<CCTK_REAL, 2> DYe_rc(
-      [&](int f) ARITH_INLINE { return dens_rc(f) * Ye_rc(f); });
-  const vec<CCTK_REAL, 2> flux_DYe(
-      [&](int f) ARITH_INLINE { return DYe_rc(f) * vtilde_rc(f); });
-
-  /* Calculate eigenvalues: */
-
   /* variable for either g^xx, g^yy or g^zz depending on the direction */
   const CCTK_REAL u_avg = calc_inv(g_avg, detg_avg)(dir_i, dir_i);
-  /* eigenvalues -- collapsed immediately to the only wavespeed bounds any
-   * consumer needs (charmax/charmin); the full lambda_tmp dies here instead of
-   * living all the way to the UCT block. fmax/fmin reductions match the old
-   * hlle/laxf/maxspeeds_from_lambdas exactly -> bit-identical. */
-  const vec<vec<CCTK_REAL, 4>, 2> lambda_tmp =
-      eigenvalues(alp_avg, beta_avg, u_avg, vel_rc, rho_rc, cs2_rc,
-                  w_lorentz_rc, h_rc, bsq_rc);
+
+  /* Idea 3 -- serialize the two face states (f=0 minus / f=1 plus). The group-B
+   * intermediates (alp_b0, Blows, B2, bsq, cs2, h, dens_h_W, dens_h_W_plus,
+   * press_plus_pmag, B_over_w) are built as per-side SCALARS inside this rolled
+   * for(f) loop, so they never live for both sides at once. Only the conserved
+   * variables, their physical fluxes and the collapsed wavespeed bounds
+   * charmax/charmin survive the loop (the HLL/LxF combine needs both sides).
+   * Every expression is copied verbatim from the old both-sides vec<2> form
+   * (the (f) index is now the loop variable) -> bit-identical under
+   * -ffp-contract=off. The momentum-component axis is the nested rolled for(j)
+   * (Idea 2). Both loops MUST stay rolled (#pragma unroll 1) or the optimizer
+   * re-merges the live ranges and the register saving is lost. */
+  vec<CCTK_REAL, 2> dens_rc, DEnt_rc, tau_rc, DYe_rc;
+  vec<CCTK_REAL, 2> flux_dens, flux_DEnt, flux_tau, flux_DYe;
+  vec<vec<CCTK_REAL, 2>, 3> moms_rc, flux_moms;
   CCTK_REAL charmax = 0, charmin = 0;
-  for (int s = 0; s < 2; ++s)
-    for (int m = 0; m < 4; ++m) {
-      charmax = fmax(charmax, lambda_tmp(s)(m));
-      charmin = fmin(charmin, lambda_tmp(s)(m));
+
+#pragma unroll 1
+  for (int f = 0; f < 2; ++f) {
+    /* per-side slices of the reconstructed vectors, so the scalar
+     * calc_contraction overloads reproduce the both-sides contraction order */
+    const vec<CCTK_REAL, 3> Bs_f(
+        [&](int i) ARITH_INLINE { return Bs_rc(i)(f); });
+    const vec<CCTK_REAL, 3> vlows_f(
+        [&](int i) ARITH_INLINE { return vlows_rc(i)(f); });
+
+    /* alpha * b0 = W * B^i * v_i */
+    const CCTK_REAL alp_b0_f =
+        w_lorentz_rc(f) * calc_contraction(Bs_f, vlows_f);
+    /* covariant magnetic field measured by the Eulerian observer */
+    const vec<CCTK_REAL, 3> Blows_f = calc_contraction(g_avg, Bs_f);
+    /* B^2 = B^i * B_i */
+    const CCTK_REAL B2_f = calc_contraction(Bs_f, Blows_f);
+    /* b^2 = b^{\mu} * b_{\mu} */
+    const CCTK_REAL bsq_f = (B2_f + pow2(alp_b0_f)) / pow2(w_lorentz_rc(f));
+
+    const CCTK_REAL cs2_f =
+        eos_3p->csnd_from_rho_temp_ye(rho_rc(f), temp_rc(f), Ye_rc(f)) *
+        eos_3p->csnd_from_rho_temp_ye(rho_rc(f), temp_rc(f), Ye_rc(f));
+    const CCTK_REAL h_f = 1 + eps_rc(f) + press_rc(f) / rho_rc(f);
+
+    /* Conservatives from primitives */
+    /* dens = sqrt(g) * D = sqrt(g) * (rho * W) */
+    const CCTK_REAL dens_f = sqrtg * rho_rc(f) * w_lorentz_rc(f);
+    dens_rc(f) = dens_f;
+    /* DEnt = sqrt(g) * D * s = sqrt(g) * (rho * W) * s */
+    DEnt_rc(f) = sqrtg * rho_rc(f) * w_lorentz_rc(f) * entropy_rc(f);
+    /* auxiliary: dens * h * W = sqrt(g) * rho * h * W^2 */
+    const CCTK_REAL dens_h_W_f = dens_f * h_f * w_lorentz_rc(f);
+    /* auxiliary: sqrt(g) * (rho*h + b^2)*W^2 */
+    const CCTK_REAL dens_h_W_plus_f =
+        dens_h_W_f + sqrtg * (pow2(alp_b0_f) + B2_f);
+    /* auxiliary: (pgas + pmag) */
+    const CCTK_REAL press_plus_pmag_f = press_rc(f) + 0.5 * bsq_f;
+    /* tau = sqrt(g)*t =
+     *  sqrt(g)((rho*h + b^2)*W^2 - (pgas+pmag) - (alpha*b^0)^2 - D) */
+    tau_rc(f) = dens_h_W_f - dens_f + sqrtg * (B2_f - press_plus_pmag_f);
+
+    /* Fluxes of conserved variables */
+    /* auxiliary: B^i / W */
+    const CCTK_REAL B_over_w_f = B_rc(f) / w_lorentz_rc(f);
+    const CCTK_REAL vtilde_f = vtilde_rc(f);
+    /* flux(dens) = sqrt(g) * D * vtilde^i */
+    flux_dens(f) = dens_f * vtilde_f;
+    /* flux(DEnt) = sqrt(g) * D * s * vtilde^i */
+    flux_DEnt(f) = DEnt_rc(f) * vtilde_f;
+    /* flux(DYe) = sqrt(g) * D * Ye * vtilde^i */
+    DYe_rc(f) = dens_f * Ye_rc(f);
+    flux_DYe(f) = DYe_rc(f) * vtilde_f;
+    /* flux(tau) = sqrt(g)*(t*vtilde^i + alpha*((pgas+pmag)*v^i - alpha*b0*B^i/W)) */
+    flux_tau(f) = tau_rc(f) * vtilde_f +
+                  alp_sqrtg * (press_plus_pmag_f * vel_rc(f) -
+                               alp_b0_f * B_over_w_f);
+
+    /* mom_j and its flux, per momentum component (Idea 2, nested rolled loop):
+     * b_j (blows_fj), mom_j (moms_fj) and flux(mom_j) are built one component
+     * at a time; moms_rc/flux_moms accumulate both sides for the post-loop
+     * combine. */
+#pragma unroll 1
+    for (int j = 0; j < 3; ++j) {
+      /* b_j = B_j/W + alpha*b^0*v_j (comoving covariant B, this component) */
+      const CCTK_REAL blows_fj =
+          Blows_f(j) / w_lorentz_rc(f) + alp_b0_f * vlows_rc(j)(f);
+      /* mom_j = sqrt(g)*S_j = (rho*h+b^2)*W^2*v_j - sqrt(g)*alpha*b^0*b_j */
+      const CCTK_REAL moms_fj =
+          dens_h_W_plus_f * vlows_rc(j)(f) - sqrtg * alp_b0_f * blows_fj;
+      moms_rc(j)(f) = moms_fj;
+      /* flux(mom_j)^i = sqrt(g)*(S_j*vtilde^i + alpha*((pgas+pmag)*delta^i_j -
+       *  b_jB^i/W)) */
+      flux_moms(j)(f) =
+          moms_fj * vtilde_f + alp_sqrtg * (press_plus_pmag_f * unit_dir_i(j) -
+                                            blows_fj * B_over_w_f);
     }
 
-  /* Calculate numerical fluxes. The scalar (dens/DEnt/tau/DYe) fluxes are stored
-   * directly; the three momentum fluxes are computed flux-by-flux in the rolled
-   * loop below. */
+    /* eigenvalues for this side, folded into the global wavespeed bounds.
+     * eigenvalues_oneside is the verbatim per-side body of eigenvalues(); the
+     * two sides are independent and fmax/fmin over both reproduce the old
+     * hlle/laxf/maxspeeds_from_lambdas reduction exactly -> bit-identical. */
+    const vec<CCTK_REAL, 4> lambda_f =
+        eigenvalues_oneside(alp_avg, beta_avg, u_avg, vel_rc(f), rho_rc(f),
+                            cs2_f, w_lorentz_rc(f), h_f, bsq_f);
+    for (int m = 0; m < 4; ++m) {
+      charmax = fmax(charmax, lambda_f(m));
+      charmin = fmin(charmin, lambda_f(m));
+    }
+  }
+
+  /* Calculate numerical fluxes. Both sides are now assembled and charmax/charmin
+   * are the collapsed wavespeed bounds from the loop. Scalar (dens/DEnt/tau/DYe)
+   * fluxes are stored directly; the three momentum fluxes are combined in the
+   * rolled loop below from the moms_rc(j)/flux_moms(j) accumulated above. */
   if (!useLO || !loworder_flux) {
     fluxdenss(dir_i)(p.I) = calcflux(charmax, charmin, dens_rc, flux_dens);
     fluxDEnts(dir_i)(p.I) = calcflux(charmax, charmin, DEnt_rc, flux_DEnt);
@@ -779,33 +775,12 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     fluxDYes(dir_i)(p.I) = laxf_cc(charmax, charmin, DYe_rc, flux_DYe);
   }
 
-  /* Momentum fluxes, flux-by-flux (Idea 2): serialize the momentum-component
-   * axis j so that b_j (blows_j), mom_j (moms_j) and its flux (flux_moms_j)
-   * live one component at a time instead of all three simultaneously. Each
-   * expression is copied verbatim from the old full-vec moms_rc(j)/flux_moms(j)
-   * (only i->j indexing) -> bit-identical. The loop MUST stay rolled
-   * (#pragma unroll 1) or the optimizer re-merges the live ranges and the
-   * register saving is lost. */
 #pragma unroll 1
   for (int j = 0; j < 3; ++j) {
-    /* b_j = B_j/W + alpha*b^0*v_j (comoving covariant B, this component only) */
-    const vec<CCTK_REAL, 2> blows_j([&](int f) ARITH_INLINE {
-      return Blows_rc(j)(f) / w_lorentz_rc(f) + alp_b0_rc(f) * vlows_rc(j)(f);
-    });
-    /* mom_j = sqrt(g)*S_j = (rho*h+b^2)*W^2*v_j - sqrt(g)*alpha*b^0*b_j */
-    const vec<CCTK_REAL, 2> moms_j([&](int f) ARITH_INLINE {
-      return dens_h_W_plus_sqrtg_W2b2_rc(f) * vlows_rc(j)(f) -
-             sqrtg * alp_b0_rc(f) * blows_j(f);
-    });
-    /* flux(mom_j)^i */
-    const vec<CCTK_REAL, 2> flux_moms_j([&](int f) ARITH_INLINE {
-      return moms_j(f) * vtilde_rc(f) +
-             alp_sqrtg * (press_plus_pmag_rc(f) * unit_dir_i(j) -
-                          blows_j(f) * B_over_w_lorentz_rc(f));
-    });
-    const CCTK_REAL fmom = (!useLO || !loworder_flux)
-                               ? calcflux(charmax, charmin, moms_j, flux_moms_j)
-                               : laxf_cc(charmax, charmin, moms_j, flux_moms_j);
+    const CCTK_REAL fmom =
+        (!useLO || !loworder_flux)
+            ? calcflux(charmax, charmin, moms_rc(j), flux_moms(j))
+            : laxf_cc(charmax, charmin, moms_rc(j), flux_moms(j));
     if (j == 0)
       fluxmomxs(dir_i)(p.I) = fmom;
     else if (j == 1)
@@ -1148,7 +1123,13 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   // and the rhs theta_tot diagnostic -- use that constant directly, so there is
   // nothing to write here.
 
-#ifdef CCTK_DEBUG
+// NOTE: disabled (#if 0) during the Idea-3 per-side serialization refactor.
+// This NaN-dump references several quantities that are no longer materialized
+// as full vec<2> (cs2_rc/h_rc/bsq_rc/alp_b0_rc/Blows_rc/dens_h_W_plus/
+// press_plus_pmag/B_over_w are now per-side scalars inside the loop above), so
+// it would not compile under -DCCTK_DEBUG until rewritten. Left in place to be
+// updated later; production builds use DEBUG=no so it is never compiled anyway.
+#if 0 // was: #ifdef CCTK_DEBUG
   // Recompute the flux-CT induction quantities for diagnostics only. In a
   // production (non-CCTK_DEBUG) build these do not exist for the upwind-CT
   // instantiation (they live inside the if constexpr(!uct) block above); here
