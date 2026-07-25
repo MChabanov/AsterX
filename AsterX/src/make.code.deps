@@ -1,0 +1,98 @@
+# LOCAL EXPERIMENT FILE -- DO NOT COMMIT.
+#
+# Per-TU compiler flags for the flux kernel occupancy work.
+# See Planning/launch-bounds-plan.md and Planning/CHECKPOINT.md.
+#
+# ---------------------------------------------------------------------------
+# 1. Resource-usage remarks. Always want this on while experimenting.
+#    Demangle with c++filt; the production kernel is
+#      CalcFluxAll<Lb1E, Lb0E, eos_3p_idealgas>  =  <uct=true, pplim=false>
+# ---------------------------------------------------------------------------
+fluxes.cxx.o: CXXFLAGS += -Rpass-analysis=kernel-resource-usage
+
+# ---------------------------------------------------------------------------
+# 1b. COMPILE-TIME ACCELERATOR for the sweep. Cuts the CalcFluxAll instantiation
+#     matrix from 16 (2 uct x 2 pplim x 4 EOS objects) to 2: idealgas, pplim=0,
+#     BOTH CT schemes. ~8x less template work per rebuild. Guard lives in
+#     fluxes.cxx and is inert without this -D.
+#
+#     Both CT schemes are kept on purpose: production is use_uct=yes, but the
+#     large-grid TOV Z4c timing run is flux-CT (use_uct=no), and both timing runs
+#     are idealgas + use_pplim=no. So this build IS usable for the timing runs --
+#     which means the whole sweep AND the timing comparison can run on the fast
+#     build. Only the test suite and the pplim / hybrid / tabulated configs need
+#     a full rebuild.
+#
+#     The resulting binary ABORTS at runtime on use_pplim=yes, hybrid EOS, or
+#     tabulated EOS. NEVER run the test suite or a golden check against it --
+#     REMOVE this line and rebuild first.
+#
+#     VALIDATE ONCE: build with this -D but NO -mllvm flags and confirm the
+#     FLUX uct1 pp0 idealgas row is still exactly 256 / 40 / 3448 / occ 1.
+#     If it differs, the shortcut is invalid -- discard it and every sweep row.
+fluxes.cxx.o: CXXFLAGS += -DASTERX_PROBE_IDEALGAS_ONLY
+
+# ---------------------------------------------------------------------------
+# 2. THE PRE-CHECK: reach occ-2 on the UNROLLED (Idea-1) kernel with SELECTIVE
+#    spill -- i.e. much less scratch than Ideas 2/3's 4984 B/lane -- using a
+#    TU-scoped compiler flag instead of the CarpetX launch_bounds plumbing.
+#
+#    --amdgpu-waves-per-eu=2  DOES NOT EXIST in the Frontier cce toolchain
+#    (2026-07-25: "Unknown command line argument", suggested --amdgpu-dce-in-ra).
+#    Do not retry it.
+#
+#    Enumerate what IS available before picking a replacement. Ask the AMDGPU
+#    backend directly (config is CXX = CC -x hip, --offload-arch=gfx90a):
+#      $ROCM_PATH/llvm/bin/llc -march=amdgcn -mcpu=gfx90a --help-hidden 2>&1 \
+#        | grep -iE '(vgpr|agpr|wave|occup|spill)'
+#    Then CONFIRM in the real build -- cce-20 may not carry the same cl::opts as
+#    ROCm's LLVM, and an unknown -mllvm arg fails fast and loudly (that is how
+#    waves-per-eu was ruled out), so trying it IS the definitive test.
+#
+#    RULED OUT (enumerated 2026-07-25, ROCm llvm on Frontier -- these exist only
+#    as IR FUNCTION ATTRIBUTES, not as -mllvm cl::opts, so they are unreachable
+#    without attaching an attribute to the kernel = the CarpetX plumbing):
+#      --amdgpu-waves-per-eu        (also errors: "Unknown command line argument")
+#      --amdgpu-spill-vgpr-to-agpr
+#      --amdgpu-num-vgpr
+#
+#    WHAT DOES EXIST, best first:
+#
+#    (a) --amdgpu-schedule-metric-bias=100
+#        "Sets the bias which adds weight to occupancy vs latency. Set it to 100
+#        to chase the occupancy only."  A direct occupancy lever. NOTE this is
+#        NOT a Lesson-1 "reorder": that lesson is about SOURCE-level reordering
+#        being null because the compiler reschedules anyway. This retargets the
+#        MACHINE scheduler, the one actor that can actually change peak liveness.
+#        Caveat: a heuristic WEIGHT, not a constraint -- it may simply decline to
+#        reach occ-2, with no way to force it. Weaker instrument than
+#        __launch_bounds__(256,2); that is the price of zero code.
+#
+#    (b) --amdgpu-opt-vgpr-liverange
+#        "Enable VGPR liverange optimizations for if-else structure." The flux
+#        kernel is branch-heavy (useLO, resetL/R, the rec_var switch, the
+#        per-direction box guards). Stack on top of (a) if (a) moves but falls
+#        short.
+#
+#    (c) do NOT use --amdgpu-schedule-relaxed-occupancy -- it RELAXES occupancy
+#        targets, the wrong direction.
+#
+#    If (a)+(b) do not reach occ-2, go to launch-bounds-plan.md Changes 1+2: a
+#    hard __launch_bounds__(256,2) constraint is strictly stronger than a
+#    scheduler heuristic.
+#
+#    MANUAL SWEEP MECHANISM: rather than editing this file per candidate, pass the
+#    flags on the gmake command line, e.g.
+#      gmake $CONFIG PROBE_FLAGS="-mllvm --misched=gcn-max-occupancy"
+#    With PROBE_FLAGS unset this line adds nothing, so normal builds are unaffected.
+fluxes.cxx.o: CXXFLAGS += $(PROBE_FLAGS)
+
+#    Candidates to pass via PROBE_FLAGS (see the tier notes above):
+#      -mllvm --misched=gcn-max-occupancy
+#      -mllvm --misched=gcn-iterative-minreg
+#      -mllvm --enable-deferred-spilling
+#      -mllvm --regalloc-eviction-max-interference-cutoff=100000
+#      -mllvm --inline-threshold=100
+#      -mllvm --amdgpu-schedule-metric-bias=100
+#      -mllvm --amdgpu-opt-vgpr-liverange
+#      -ffinite-math-only      (DIAGNOSTIC only -- kills isnan() detection)
