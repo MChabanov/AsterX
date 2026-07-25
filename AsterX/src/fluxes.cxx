@@ -670,13 +670,26 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   // Currently, computing press for classical ideal gas from reconstructed
   // vars
 
-  const vec<CCTK_REAL, 2> cs2_rc([&](int f) ARITH_INLINE {
-    return eos_3p->csnd_from_rho_temp_ye(rho_rc(f), temp_rc(f), Ye_rc(f)) *
-           eos_3p->csnd_from_rho_temp_ye(rho_rc(f), temp_rc(f), Ye_rc(f));
-  });
+  /* THE WAIST (see Planning/flux-construction.md 10a/11a).
+   * The whole magnetic sector is absorbed into three scalars here:
+   *   H_rc      = rho*h + b^2         (total enthalpy)
+   *   vf2_rc    = (b^2 + cs^2*rho*h)/H = cA^2 + cs^2(1-cA^2)   (fast speed)
+   *   press_plus_pmag_rc = p + b^2/2                           (below, unchanged)
+   * H replaces rho*h, vf2 replaces cs^2 and p_tot replaces p, rather than
+   * sitting alongside them -- so cs2_rc, h_rc, B2_rc, bsq_rc and BOTH of the
+   * old dens_h_W_rc / dens_h_W_plus_sqrtg_W2b2_rc stop existing as values.
+   * B2_rc and bsq_rc become transients dying right here instead of living to
+   * the tau/p_tot assembly. rhoh_rc is the division-free rho + rho*eps + p. */
 
-  const vec<CCTK_REAL, 2> h_rc([&](int f) ARITH_INLINE {
-    return 1 + eps_rc(f) + press_rc(f) / rho_rc(f);
+  /* total enthalpy including the magnetic contribution: H = rho*h + b^2 */
+  const vec<CCTK_REAL, 2> H_rc = rhoh_rc + bsq_rc;
+
+  /* fast speed vf2 = cA^2 + cs^2 (1 - cA^2); the ONLY route by which the
+   * magnetic field reaches the characteristic speeds (H cancels in the roots) */
+  const vec<CCTK_REAL, 2> vf2_rc([&](int f) ARITH_INLINE {
+    const CCTK_REAL cs =
+        eos_3p->csnd_from_rho_temp_ye(rho_rc(f), temp_rc(f), Ye_rc(f));
+    return (bsq_rc(f) + cs * cs * rhoh_rc(f)) / H_rc(f);
   });
 
   /* Computing conservatives from primitives: */
@@ -692,28 +705,31 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     return sqrtg * rho_rc(f) * w_lorentz_rc(f) * entropy_rc(f);
   });
 
-  /* auxiliary: dens * h * W = sqrt(g) * rho * h * W^2 */
-  const vec<CCTK_REAL, 2> dens_h_W_rc([&](int f) ARITH_INLINE {
-    return dens_rc(f) * h_rc(f) * w_lorentz_rc(f);
+  /* auxiliary: Q = sqrt(g) * (rho*h + b^2) * W^2 = sqrt(g) * H * W^2.
+   * Identical (in exact arithmetic) to the old
+   *   dens_h_W + sqrt(g)*((alpha*b^0)^2 + B^2)
+   * via b^2 = (B^2 + (alpha*b^0)^2)/W^2, but formed in one step so that neither
+   * dens_h_W nor B2_rc has to stay live to this point. */
+  const vec<CCTK_REAL, 2> Q_rc([&](int f) ARITH_INLINE {
+    return sqrtg * H_rc(f) * pow2(w_lorentz_rc(f));
   });
-  /* auxiliary: sqrt(g) * (rho*h + b^2)*W^2 */
-  const vec<CCTK_REAL, 2> dens_h_W_plus_sqrtg_W2b2_rc =
-      dens_h_W_rc + sqrtg * (pow2(alp_b0_rc) + B2_rc);
   /* auxiliary: (pgas + pmag) */
   const vec<CCTK_REAL, 2> press_plus_pmag_rc = press_rc + 0.5 * bsq_rc;
 
   /* mom_i = sqrt(g)*S_i = sqrt(g)((rho*h+b^2)*W^2*v_i - alpha*b^0*b_i) */
   const vec<vec<CCTK_REAL, 2>, 3> moms_rc([&](int i) ARITH_INLINE {
     return vec<CCTK_REAL, 2>([&](int f) ARITH_INLINE {
-      return dens_h_W_plus_sqrtg_W2b2_rc(f) * vlows_rc(i)(f) -
-             sqrtg * alp_b0_rc(f) * blows_rc(i)(f);
+      return Q_rc(f) * vlows_rc(i)(f) - sqrtg * alp_b0_rc(f) * blows_rc(i)(f);
     });
   });
 
   /* tau = sqrt(g)*t =
-   *  sqrt(g)((rho*h + b^2)*W^2 - (pgas+pmag) - (alpha*b^0)^2 - D) */
-  const vec<CCTK_REAL, 2> tau_rc =
-      dens_h_W_rc - dens_rc + sqrtg * (B2_rc - press_plus_pmag_rc);
+   *  sqrt(g)((rho*h + b^2)*W^2 - (pgas+pmag) - (alpha*b^0)^2 - D)
+   *      = Q - dens - sqrt(g)*((pgas+pmag) + (alpha*b^0)^2) */
+  const vec<CCTK_REAL, 2> tau_rc([&](int f) ARITH_INLINE {
+    return Q_rc(f) - dens_rc(f) -
+           sqrtg * (press_plus_pmag_rc(f) + pow2(alp_b0_rc(f)));
+  });
 
   /* Computing fluxes of conserved variables: */
 
@@ -764,14 +780,15 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   const CCTK_REAL u_avg = calc_inv(g_avg, detg_avg)(dir_i, dir_i);
   /* eigenvalues -- collapsed immediately to the only wavespeed bounds any
    * consumer needs (charmax/charmin); the full lambda_tmp dies here instead of
-   * living all the way to the UCT block. fmax/fmin reductions match the old
-   * hlle/laxf/maxspeeds_from_lambdas exactly -> bit-identical. */
-  const vec<vec<CCTK_REAL, 4>, 2> lambda_tmp =
-      eigenvalues(alp_avg, beta_avg, u_avg, vel_rc, rho_rc, cs2_rc,
-                  w_lorentz_rc, h_rc, bsq_rc);
+   * living all the way to the UCT block. The magnetic sector enters ONLY through
+   * vf2_rc, so rho_rc/cs2_rc/h_rc/bsq_rc are no longer passed (see the header
+   * derivation in eigenvalues.hxx); the returned pair is the fast pair, no
+   * longer duplicated fourfold. */
+  const vec<vec<CCTK_REAL, 2>, 2> lambda_tmp =
+      eigenvalues(alp_avg, beta_avg, u_avg, vel_rc, vf2_rc, w_lorentz_rc);
   CCTK_REAL charmax = 0, charmin = 0;
   for (int s = 0; s < 2; ++s)
-    for (int m = 0; m < 4; ++m) {
+    for (int m = 0; m < 2; ++m) {
       charmax = fmax(charmax, lambda_tmp(s)(m));
       charmin = fmin(charmin, lambda_tmp(s)(m));
     }
@@ -939,9 +956,10 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     const vec<CCTK_REAL, 2> B_ppl{Bs_ppl(dir_i)};
     const vec<CCTK_REAL, 2> vtilde_ppl{vtildes_ppl(dir_i)};
 
-    const vec<CCTK_REAL, 2> h_ppl([&](int f) ARITH_INLINE {
-      return 1 + eps_ppl(f) + press_ppl(f) / rho_ppl(f);
-    });
+    /* total enthalpy including the magnetic contribution: H = rho*h + b^2.
+     * Same waist as the _rc path (Planning/flux-construction.md 10a); kept
+     * symmetric so the pplim=yes kernel does not diverge in formulation. */
+    const vec<CCTK_REAL, 2> H_ppl = rhoh_ppl + bsq_ppl;
 
     /* Computing conservatives from primitives: */
 
@@ -956,28 +974,28 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
       return sqrtg * rho_ppl(f) * w_lorentz_ppl(f) * entropy_ppl(f);
     });
 
-    /* auxiliary: dens * h * W = sqrt(g) * rho * h * W^2 */
-    const vec<CCTK_REAL, 2> dens_h_W_ppl([&](int f) ARITH_INLINE {
-      return dens_ppl(f) * h_ppl(f) * w_lorentz_ppl(f);
+    /* auxiliary: Q = sqrt(g) * (rho*h + b^2) * W^2 = sqrt(g) * H * W^2 */
+    const vec<CCTK_REAL, 2> Q_ppl([&](int f) ARITH_INLINE {
+      return sqrtg * H_ppl(f) * pow2(w_lorentz_ppl(f));
     });
-    /* auxiliary: sqrt(g) * (rho*h + b^2)*W^2 */
-    const vec<CCTK_REAL, 2> dens_h_W_plus_sqrtg_W2b2_ppl =
-        dens_h_W_ppl + sqrtg * (pow2(alp_b0_ppl) + B2_ppl);
     /* auxiliary: (pgas + pmag) */
     const vec<CCTK_REAL, 2> press_plus_pmag_ppl = press_ppl + 0.5 * bsq_ppl;
 
     /* mom_i = sqrt(g)*S_i = sqrt(g)((rho*h+b^2)*W^2*v_i - alpha*b^0*b_i) */
     const vec<vec<CCTK_REAL, 2>, 3> moms_ppl([&](int i) ARITH_INLINE {
       return vec<CCTK_REAL, 2>([&](int f) ARITH_INLINE {
-        return dens_h_W_plus_sqrtg_W2b2_ppl(f) * vlows_ppl(i)(f) -
+        return Q_ppl(f) * vlows_ppl(i)(f) -
                sqrtg * alp_b0_ppl(f) * blows_ppl(i)(f);
       });
     });
 
     /* tau = sqrt(g)*t =
-     *  sqrt(g)((rho*h + b^2)*W^2 - (pgas+pmag) - (alpha*b^0)^2 - D) */
-    const vec<CCTK_REAL, 2> tau_ppl =
-        dens_h_W_ppl - dens_ppl + sqrtg * (B2_ppl - press_plus_pmag_ppl);
+     *  sqrt(g)((rho*h + b^2)*W^2 - (pgas+pmag) - (alpha*b^0)^2 - D)
+     *      = Q - dens - sqrt(g)*((pgas+pmag) + (alpha*b^0)^2) */
+    const vec<CCTK_REAL, 2> tau_ppl([&](int f) ARITH_INLINE {
+      return Q_ppl(f) - dens_ppl(f) -
+             sqrtg * (press_plus_pmag_ppl(f) + pow2(alp_b0_ppl(f)));
+    });
 
     /* Btildes^i = sqrt(g) * B^i */
     const vec<vec<CCTK_REAL, 2>, 3> Btildes_ppl(
@@ -1199,9 +1217,10 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
            alp_avg, beta_avg, u_avg);
     printf("  vel_rc  = %16.8e, %16.8e \n", vel_rc(0), vel_rc(1));
     printf("  rho_rc  = %16.8e, %16.8e \n", rho_rc(0), rho_rc(1));
-    printf("  cs2_rc  = %16.8e, %16.8e \n", cs2_rc(0), cs2_rc(1));
+    printf("  vf2_rc  = %16.8e, %16.8e \n", vf2_rc(0), vf2_rc(1));
     printf("  wlor_rc = %16.8e, %16.8e \n", w_lorentz_rc(0), w_lorentz_rc(1));
-    printf("  h_rc    = %16.8e, %16.8e \n", h_rc(0), h_rc(1));
+    printf("  rhoh_rc = %16.8e, %16.8e \n", rhoh_rc(0), rhoh_rc(1));
+    printf("  H_rc    = %16.8e, %16.8e \n", H_rc(0), H_rc(1));
     printf("  bsq_rc  = %16.8e, %16.8e \n", bsq_rc(0), bsq_rc(1));
     printf("  press_rc = %16.8e, %16.8e \n", press_rc(0), press_rc(1));
     printf("  eps_rc   = %16.8e, %16.8e \n", eps_rc(0), eps_rc(1));

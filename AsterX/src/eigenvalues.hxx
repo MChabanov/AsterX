@@ -16,64 +16,61 @@ namespace AsterX {
 using namespace std;
 using namespace Arith;
 
+/* Fast-magnetosonic characteristic speeds, fused form.
+ *
+ * Eq. (28) of Giacomazzo & Rezzolla (2007) with b^i=0 is a quadratic
+ * a_2 lambda^2 + a_1 lambda + a_0 = 0 with
+ *
+ *   a_0 = (b^2 + cs^2 h rho)(beta^2 - alp^2 u) - (cs^2-1) h rho (beta-alp v)^2 W^2
+ *   a_1 = 2 beta (b^2 + cs^2 h rho) - 2 (cs^2-1) h rho (beta-alp v) W^2
+ *   a_2 = b^2 + h rho (cs^2 + W^2 - cs^2 W^2)
+ *
+ * Introducing the total enthalpy H = rho*h + b^2 and the fast speed
+ *
+ *   vf2 = (b^2 + cs^2 rho h)/H = cA^2 + cs^2 (1 - cA^2),   cA^2 = b^2/H
+ *
+ * one has, term by term,   b^2 + cs^2 h rho = vf2 H,
+ * (cs^2-1) h rho = (vf2-1) H  and  a_2 = H [vf2 + W^2 (1-vf2)], i.e. ALL THREE
+ * coefficients carry the common factor H.  Since the roots are homogeneous of
+ * degree zero in the a_n, H cancels identically: the quadratic is exactly the
+ * pure GR-hydro acoustic quadratic with cs^2 -> vf2, and the whole magnetic
+ * sector reaches the wave speeds through the single scalar vf2.
+ *
+ * With K = (1-vf2) W^2 and a2h = vf2 + K the discriminant collapses (the
+ * beta-dependence cancels via beta - (beta - alp v) = alp v):
+ *
+ *   (1/4) Delta = vf2 alp^2 [u a2h - K v^2]
+ *
+ * and, using  beta vf2 + K(beta - alp v) = beta a2h - K alp v,
+ *
+ *   lambda_pm = -beta + alp [ K v +- sqrt(vf2 (u a2h - K v^2)) ] / a2h
+ *
+ * The radicand is strictly positive by construction:
+ * u a2h - K v^2 >= u vf2 + K(u - v^2), and Cauchy-Schwarz on
+ * v^{dir_i} = delta^{dir_i}_j v^j gives (v^{dir_i})^2 <= g^{dir_i dir_i} v_j v^j
+ * < u.  The fmax below is therefore roundoff insurance only -- if it ever bites,
+ * something upstream (EOS, velocity limiter) is wrong.  Contrast the unfused
+ * form, where a_1^2 - 4 a_2 a_0 is a cancellation-prone difference of large
+ * like-signed numbers all carrying the dimensional factor H and the clamp was
+ * load-bearing.
+ *
+ * Returns the two roots (index 0 = lambda_+, 1 = lambda_-) per side.  The
+ * fourfold duplication of the old 4-vector return was only ever the degenerate
+ * fast pair; the caller reduces to charmax/charmin anyway. */
 inline CCTK_ATTRIBUTE_ALWAYS_INLINE
-    CCTK_DEVICE CCTK_HOST vec<vec<CCTK_REAL, 4>, 2>
+    CCTK_DEVICE CCTK_HOST vec<vec<CCTK_REAL, 2>, 2>
     eigenvalues(CCTK_REAL alp_avg, CCTK_REAL beta_avg, CCTK_REAL u_avg,
-                vec<CCTK_REAL, 2> vel, vec<CCTK_REAL, 2> rho,
-                vec<CCTK_REAL, 2> cs2, vec<CCTK_REAL, 2> w_lor,
-                vec<CCTK_REAL, 2> h, vec<CCTK_REAL, 2> bsq) {
-  // computing characteristics for the minus side
-  // See Eq. (28) of Giacomazzo & Rezzolla (2007) with b^i=0
-  vec<CCTK_REAL, 3> a_m{
-      (bsq(0) + cs2(0) * h(0) * rho(0)) *
-              (pow2(beta_avg) - pow2(alp_avg) * u_avg) -
-          (-1 + cs2(0)) * h(0) * rho(0) * pow2(beta_avg - alp_avg * vel(0)) *
-              pow2(w_lor(0)),
-
-      2 * beta_avg * (bsq(0) + cs2(0) * h(0) * rho(0)) -
-          2 * (-1 + cs2(0)) * h(0) * rho(0) * (beta_avg - alp_avg * vel(0)) *
-              pow2(w_lor(0)),
-
-      bsq(0) +
-          h(0) * rho(0) * (cs2(0) + pow2(w_lor(0)) - cs2(0) * pow2(w_lor(0)))};
-
-  CCTK_REAL det_m = pow2(a_m(1)) - 4 * a_m(2) * a_m(0);
-  if (det_m < 0)
-    det_m = 0;
-
-  vec<CCTK_REAL, 4> lambda_m{((-a_m(1) + sqrt(det_m)) / (2 * a_m(2))),
-                             ((-a_m(1) + sqrt(det_m)) / (2 * a_m(2))),
-                             ((-a_m(1) - sqrt(det_m)) / (2 * a_m(2))),
-                             ((-a_m(1) - sqrt(det_m)) / (2 * a_m(2)))};
-
-  // computing characteristics for the plus side
-
-  vec<CCTK_REAL, 3> a_p{
-      (bsq(1) + cs2(1) * h(1) * rho(1)) *
-              (pow2(beta_avg) - pow2(alp_avg) * u_avg) -
-          (-1 + cs2(1)) * h(1) * rho(1) * pow2(beta_avg - alp_avg * vel(1)) *
-              pow2(w_lor(1)),
-
-      2 * beta_avg * (bsq(1) + cs2(1) * h(1) * rho(1)) -
-          2 * (-1 + cs2(1)) * h(1) * rho(1) * (beta_avg - alp_avg * vel(1)) *
-              pow2(w_lor(1)),
-
-      bsq(1) +
-          h(1) * rho(1) * (cs2(1) + pow2(w_lor(1)) - cs2(1) * pow2(w_lor(1)))};
-
-  CCTK_REAL det_p = pow2(a_p(1)) - 4 * a_p(2) * a_p(0);
-  if (det_p < 0)
-    det_p = 0;
-
-  vec<CCTK_REAL, 4> lambda_p{((-a_p(1) + sqrt(det_p)) / (2 * a_p(2))),
-                             ((-a_p(1) + sqrt(det_p)) / (2 * a_p(2))),
-                             ((-a_p(1) - sqrt(det_p)) / (2 * a_p(2))),
-                             ((-a_p(1) - sqrt(det_p)) / (2 * a_p(2)))};
-
-  // 2D array containing characteristics for left (minus) and right
-  // (plus) sides
-  vec<vec<CCTK_REAL, 4>, 2> lambda{lambda_m, lambda_p};
-  return lambda;
+                vec<CCTK_REAL, 2> vel, vec<CCTK_REAL, 2> vf2,
+                vec<CCTK_REAL, 2> w_lor) {
+  return vec<vec<CCTK_REAL, 2>, 2>([&](int f) ARITH_INLINE {
+    const CCTK_REAL K = (1 - vf2(f)) * pow2(w_lor(f));
+    const CCTK_REAL a2h = vf2(f) + K;
+    const CCTK_REAL rad = u_avg * a2h - K * pow2(vel(f));
+    const CCTK_REAL disc = alp_avg * sqrt(fmax(0.0, vf2(f) * rad));
+    const CCTK_REAL drift = alp_avg * K * vel(f);
+    return vec<CCTK_REAL, 2>{-beta_avg + (drift + disc) / a2h,
+                             -beta_avg + (drift - disc) / a2h};
+  });
 };
 
 } // namespace AsterX
