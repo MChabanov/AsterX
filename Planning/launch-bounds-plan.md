@@ -10,6 +10,12 @@ state; `4f902ca1` on top adds the inert probe guard). User has a CarpetX fork at
 `../CarpetX` for the trial. Rationale + why this beats the serialization:
 `CHECKPOINT.md` §KEY LESSONS 3 (the register↔scratch seesaw).
 
+**PR hygiene:** the upstream-bound work is `b23fb947`..`defd9f60` only; `4f902ca1`
+(probe guard), `25f08a66` (Planning docs) and `2fd4595e` (`make.code.deps`, which
+hardwires `-Rpass` + `-DASTERX_PROBE_IDEALGAS_ONLY` and makes the binary abort on
+pplim/hybrid/tabulated) sit on top and must be branched off or reverted before
+submitting — and must never reach a golden or test-suite run.
+
 ### ⚠ THREE CORRECTIONS, verified against the sources 2026-07-25
 
 1. **The pseudocode below is wrong about the lambda form.** CarpetX passes an
