@@ -1676,6 +1676,13 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
       break;
     }
     case eos_3param::Hybrid: {
+#ifdef ASTERX_PROBE_IDEALGAS_ONLY
+      // PROBE BUILD ONLY -- see the ASTERX_PROBE_IDEALGAS_ONLY note at the
+      // dispatch below. Hybrid instantiations of CalcFluxAll are compiled out
+      // to cut rebuild time during the register/occupancy sweep.
+      CCTK_ERROR("ASTERX_PROBE_IDEALGAS_ONLY probe build: hybrid EOS is "
+                 "compiled out. Rebuild without -DASTERX_PROBE_IDEALGAS_ONLY.");
+#else
       // Note: the nested if conditions below could be inefficient.
       // This needs to be tested, and restructured, if required.
       if (global_eos_3p_hyb_pwpoly) {
@@ -1694,15 +1701,21 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
         CCTK_ERROR(
             "Hybrid EOS selected but no hybrid EOS object was initialized");
       }
+#endif // ASTERX_PROBE_IDEALGAS_ONLY
 
       break;
     }
     case eos_3param::Tabulated: {
+#ifdef ASTERX_PROBE_IDEALGAS_ONLY
+      CCTK_ERROR("ASTERX_PROBE_IDEALGAS_ONLY probe build: tabulated EOS is "
+                 "compiled out. Rebuild without -DASTERX_PROBE_IDEALGAS_ONLY.");
+#else
       // Get local eos object
       auto eos_3p_tab3d = global_eos_3p_tab3d;
 
       CalcFluxAll<uct, pplim>(cctkGH, eos_3p_tab3d, rec_var, reconstruction,
                        reconstruction_LO, reconstruct_params, fluxtype);
+#endif
       break;
     }
     default:
@@ -1713,6 +1726,43 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
   // Dispatch both compile-time flags (use_uct, use_pplim) from their runtime
   // parameters. Reading them per call respects their STEERABLE=always
   // semantics. 2 (uct) x 2 (pplim) x EOS instantiations of CalcFluxAll.
+#ifdef ASTERX_PROBE_IDEALGAS_ONLY
+  // ===================== PROBE BUILD -- NOT FOR PRODUCTION =================
+  // Enabled ONLY via `-DASTERX_PROBE_IDEALGAS_ONLY` in the uncommitted
+  // AsterX/src/make.code.deps. Inert otherwise, so the tracked source is
+  // unchanged for any normal build.
+  //
+  // Purpose: the register/occupancy sweep rebuilds fluxes.cxx once per -mllvm
+  // flag, and the full matrix is 2 (uct) x 2 (pplim) x 4 EOS objects = 16
+  // instantiations of the ~1000-line CalcFluxAll with all of ReconX inlined.
+  // Drop pplim=true (which carries the whole duplicated S5-S9 _ppl chain) and
+  // the three non-idealgas EOS objects, keeping BOTH CT schemes: 16 -> 2
+  // instantiations, ~8x less template work per rebuild.
+  //
+  // BOTH CT schemes are retained deliberately: production is use_uct=yes, but
+  // the large-grid TOV Z4c timing comparison is flux-CT (use_uct=no), and both
+  // timing runs are idealgas with use_pplim=no. So this accelerated build is
+  // usable for the TIMING runs too, not just -Rpass -- only the test suite and
+  // the tabulated/hybrid/pplim configs are out of reach.
+  //
+  // *** VALIDATE THE SHORTCUT ONCE BEFORE TRUSTING ANY SWEEP ROW. ***
+  // Build this with NO -mllvm flags and confirm the FLUX uct1 pp0 idealgas row
+  // is still exactly VGPR 256 / AGPR 40 / scratch 3448 / occ 1. Register
+  // allocation and inlining are per-function so it SHOULD be identical -- but
+  // if it is not, the shortcut is invalid and every sweep number taken with it
+  // is worthless.
+  //
+  // This build ABORTS at runtime on: use_pplim=yes, hybrid EOS, tabulated EOS.
+  // Never run the test suite or a golden check against it.
+  if (use_pplim)
+    CCTK_ERROR("ASTERX_PROBE_IDEALGAS_ONLY probe build: use_pplim=yes is "
+               "compiled out. Rebuild without -DASTERX_PROBE_IDEALGAS_ONLY.");
+  if (use_uct)
+    run_all(std::true_type{}, std::false_type{});
+  else
+    run_all(std::false_type{}, std::false_type{});
+  // ========================================================================
+#else
   if (use_uct) {
     if (use_pplim)
       run_all(std::true_type{}, std::true_type{});
@@ -1724,6 +1774,7 @@ extern "C" void AsterX_Fluxes(CCTK_ARGUMENTS) {
     else
       run_all(std::false_type{}, std::false_type{});
   }
+#endif
 }
 
 template <int i, bool use_uct>
