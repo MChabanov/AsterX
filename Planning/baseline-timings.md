@@ -201,6 +201,17 @@ measurement:
 CarpetX `opt/loop-box-device-min-blocks` @ `19267243` + AsterX `c96df5d5`
 (`MB=2` at the fused flux site). `-Rpass`: `uct1` 128 VGPR / 128 AGPR / 3608
 B/lane / **occ 2**, spills 0/0 (`launch-bounds-plan.md` §TRIAL RESULT).
+
+**⚠ WHAT THE BASELINE IS, for both this run and the TOV run below.** The
+"baseline" column is the **full build at `defd9f60`** ("AsterX: template
+use_pplim to compile out + storage-gate the PP limiter"), i.e. the Idea-1 state:
+`uct1` = 256 VGPR / 40 AGPR / 3448 B/lane / **occ 1**. It is **NOT** an occ-2
+build and has nothing to do with the serialization branch
+(`opt/flux-eig-collapse` @ `210a013c`, the occ-2-by-rolled-loops experiment in the
+section above). So both comparisons below read **occ-1 → occ-2**, and the same
+reference point is used for both grid sizes, which is what makes the two Δ's
+comparable to each other.
+
 Side-by-side TimerReport, same par file, same iteration count:
 
 | timer | occ-2 (`MB=2`) | baseline | Δ |
@@ -255,3 +266,86 @@ exactly 0; `launch_bounds` is a codegen directive).
 Cross-run caveat: the small-grid baseline in the serialization table above reads
 125.9 s for `AsterX_Fluxes` where this baseline reads 115.639 s — different
 baseline builds/runs, so compare the two experiments by **fraction, not seconds**.
+
+### ⭐⭐ occ-2 via scoped `launch_bounds(256,2)` — TOV Z4c / flux-CT / larger grid (2026-07-27)
+
+Same builds as the run above (`MB=2`, reduced, vs the Idea-1 full-build baseline).
+Side-by-side TimerReport:
+
+| timer | occ-2 (`MB=2`) | baseline `defd9f60` | Δ |
+|---|---:|---:|---:|
+| **AsterX_Fluxes** | **124.848 s** | **171.622 s** | **−27.3 %** |
+| ODESolvers::Solve::rhs | 295.379 | 342.543 | −13.8 % |
+| ODESolvers::Solve | 382.350 | 430.279 | −11.1 % |
+| **CCTK total time** | **542.565** | **588.706** | **−7.8 %** |
+| **Z4c_RHS** | **83.189** | **83.313** | **−0.1 %** |
+| AsterX_SourceTerms | 56.667 | 56.613 | +0.1 % |
+| AsterX_Tmunu | 32.670 | 32.644 | +0.1 % |
+| OutputSilo | 88.218 | 88.233 | −0.0 % |
+| OutputGH | 135.432 | 133.669 | +1.3 % |
+| AsterX_RHS | 12.828 | 13.311 | −3.6 % |
+| Solve::poststep | 77.930 | 78.686 | −1.0 % |
+| Fluxes as fraction of Solve | 32.7 % | 39.9 % | **−7.2 pp** |
+
+**Isolated again, and this time it also settles the collateral question.** Fluxes
+−46.77 s, `Solve::rhs` −47.16 s: the RHS improvement is the flux kernel to within
+0.4 s. (`Solve` −47.93 s = rhs −47.16 plus poststep −0.76.) **`Z4c_RHS` is flat at
+0.1 %** — the earlier *global* `__launch_bounds__` experiment bought its −15.9 %
+with Z4c collateral, and this is the direct demonstration that the scoped version
+does not: same run, same kernel, untouched. `SourceTerms`, `Tmunu`, `OutputSilo`
+all flat inside 0.2 %. (`OutputNorms` 42.5 vs 44.6, `OutputGH` +1.3 % and
+`Initialise` 68.0 vs 64.9 are I/O and startup variance, not signal.)
+
+**⚠ MY PREDICTION FOR THIS RUN WAS WRONG, and the reason matters.** The
+`launch-bounds-plan.md` §TRIAL RESULT note predicted TOV-large would be
+"neutral-to-slightly-negative" because `uct0` was already occ-2. That reasoning
+took `uct0`'s occupancy from the **reduced** build (252/2/3448/occ-2) and applied
+it to a **full-build** baseline where it had never been measured — the exact gap
+flagged in the same paragraph ("`uct0`'s full-build baseline was never recorded,
+or this comparison stays guesswork"). The reduced-build `uct0` sat two registers
+under the cliff at 254, previously characterised as *threshold luck rather than a
+mechanism*, and luck does not survive a different compilation: the full build's
+extra inlining almost certainly pushed it over 256, i.e. the baseline `uct0` was
+occ-1 too, so `MB=2` bought it the same second wave. **Take `uct0`'s full-build
+numbers and this stops being a story.** General lesson, consistent with the
+reduced-vs-full warning at the top of this section: never extrapolate a
+reduced-build occupancy to a full build, in either direction.
+
+**⭐ THE DIRECT COMPARISON OF THE TWO occ-2 ROUTES — same baseline, same run.**
+This TOV baseline is `AsterX_Fluxes` = 171.6 s, which is *exactly* the baseline in
+the serialization table above. So for the first time the two ways of reaching occ-2
+can be compared without any confound about reference points:
+
+| route to occ-2 on TOV-large | scratch B/lane | AsterX_Fluxes | Δ vs `defd9f60` |
+|---|---:|---:|---:|
+| serialization (rolled loops, `210a013c`) | 4984 | 163.3 s | −4.8 % |
+| **scoped `launch_bounds(256,2)`** | **3608** | **124.8 s** | **−27.3 %** |
+| (global `__launch_bounds__`, earlier probe) | — | ~144 s | −15.9 % |
+
+**Same occupancy, 5.7× the benefit, and the only difference is where the overflow
+lives.** This is the cleanest possible confirmation of `CHECKPOINT.md` Lesson 3:
+occ-2 was never the problem, the scratch was. It also beats the old *global*
+forced-`launch_bounds` probe (−15.9 %) — and beats it while leaving `Z4c_RHS`
+untouched, which that probe did not. ⚠ One caveat on the third row: the code state
+under the global probe is not recorded (probably pre-Idea-1), so treat −15.9 % as
+indicative rather than a matched measurement; rows 1 and 2 are matched.
+
+**Bigger grid, bigger payoff — but only slightly: −27.3 % (TOV-large) vs −29.1 %
+(UCT-small)**, i.e. the two grids now behave almost identically. That is itself the
+finding: the serialization's dramatic grid-size sign flip (−4.8 % vs +8.9 %) was a
+scratch-bandwidth artifact, and once the extra scratch is only +160 B/lane instead
+of +1536, the grid-size dependence largely disappears and both configurations win
+by about the same fraction.
+
+**Same confound as the small-grid run: reduced (`MB=2`) vs full (baseline) build.**
+The control is unchanged and still owed — same reduced build, `MB=0`, same par
+file — and it now covers both runs at once. Until it is run, both headline numbers
+are (instantiation cut + `MB=2`).
+
+**Correction, same day:** this section first reported −47.4 % against a 237.4 s
+baseline. That was the wrong baseline column; the correct `defd9f60` reference is
+171.6 s, giving −27.3 %. The derived figures (total −7.8 % not −17.6 %, −7.2 pp not
+−15.0 pp) and the "bigger grid, bigger payoff" reading were corrected with it — on
+the right numbers the two grids come out within 2 pp of each other, which is a
+different conclusion. The upside of the fix: 171.6 s is the serialization table's
+baseline too, which is what makes the head-to-head above possible.

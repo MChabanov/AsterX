@@ -17,7 +17,25 @@ from bit-identity-gated refactors (golden-master = exactly 0) and now
 register/occupancy work measured on Frontier/MI250X. CI CPU is cost-neutral by
 design; the payoff is GPU.
 
-## STATUS: occ-2 is reachable but carries a scratch tradeoff — one route left (`launch_bounds`)
+## STATUS: ⭐ SOLVED (pending controls) — scoped `launch_bounds` gives occ-2 at low scratch, −29 % / −47 % on the flux kernel
+
+**Headline, 2026-07-27.** A `min_blocks` template parameter on CarpetX
+`loop_box_device` (branch `opt/loop-box-device-min-blocks` @ `19267243`) plus
+`MB=2` at the one fused flux site (AsterX `c96df5d5`) reaches **occ-2 at scratch
+3608 B/lane** (vs the serialization's 4984) and times **−29.1 % on UCT-small** and
+**−27.3 % on TOV-large** for `AsterX_Fluxes` (−7.8 % of total wall clock there),
+with `Z4c_RHS` flat. Both grid sizes win by about the same fraction: the grid-size
+sign flip that defined this investigation was a *scratch* artifact, not a property
+of occ-2. Against the same TOV baseline the serialization managed only −4.8 %.
+
+**Not yet a finished result.** Both timing runs used the reduced probe build
+against a full-build baseline, so the numbers are (instantiation cut + `MB=2`).
+The control — same reduced build, `MB=0` — plus a full-build re-measurement and
+the golden gate are what stand between this and a PR. Details in
+`baseline-timings.md`; the history below is kept because the negative results are
+what make the positive one interpretable.
+
+## Historical framing: occ-2 is reachable but carries a scratch tradeoff — one route left (`launch_bounds`)
 
 The production ideal-gas flux kernel was occupancy-bound at **occ-1**. A
 source-only serialization stack (Ideas 1/2/3) reached **occ-2**, but the way it
@@ -82,11 +100,32 @@ still open**, and both closures are measurements, not guesses:
    The two plan corrections held (the replication calls
    `amrex::detail::call_f_intvect_handler`; the 7th template argument does break
    stock-CarpetX builds).
-   **⭐ TIMED 2026-07-27, UCT-small: `AsterX_Fluxes` −29.1 %** (81.958 vs 115.639 s),
-   −6.8 pp of Solve, −6.3 % CCTK total, every unrelated timer flat inside ±1 %.
-   **This is the configuration the serialization LOST on (+8.9 %)**, and it beats
-   the old global-`launch_bounds` reference (−15.9 % on TOV) without that test's
-   Z4c collateral. Full table: `baseline-timings.md`.
+   **⭐ TIMED 2026-07-27, BOTH GRID SIZES WIN — the grid-size sign flip is GONE:**
+   - **UCT-small: `AsterX_Fluxes` −29.1 %** (81.958 vs 115.639 s), −6.8 pp of
+     Solve, −6.3 % CCTK total. **This is the configuration the serialization LOST
+     on (+8.9 %).**
+   - **TOV-large/flux-CT: `AsterX_Fluxes` −27.3 %** (124.848 vs 171.622 s),
+     −7.2 pp of Solve, **−7.8 % CCTK total**, and **`Z4c_RHS` flat at 0.1 %** — the
+     direct demonstration that the scoped version avoids the collateral the old
+     *global* `__launch_bounds__` test paid for its −15.9 %.
+   In both runs every unrelated timer is flat inside ±1 % and the flux delta
+   accounts for the whole `Solve::rhs` delta (−33.7/−34.0 s and −46.8/−47.2 s).
+   Full tables: `baseline-timings.md`.
+   **⭐ Both baselines are the SAME occ-1 full build at `defd9f60`** (the
+   `use_pplim` template commit; `uct1` = 256/40/3448/occ-1) — **not** an occ-2 build
+   and unrelated to the serialization branch. And on TOV that baseline (171.6 s) is
+   the very one the serialization was measured against, so the two occ-2 routes
+   compare head-to-head with no confound: **serialization −4.8 % (scratch 4984) vs
+   scoped `launch_bounds` −27.3 % (scratch 3608)**. Same occupancy, 5.7× the
+   benefit; the entire difference is where the overflow lives. Lesson 3, confirmed
+   as cleanly as it can be.
+   The two grids also land within 2 pp of each other (−29.1 % / −27.3 %), so the
+   serialization's grid-size sign flip was a scratch artifact, not a property of
+   occ-2.
+   **⚠ My prediction that TOV-large would be neutral was WRONG** — it extrapolated
+   `uct0`'s *reduced*-build occ-2 (252/2, previously called threshold luck) to a
+   full-build baseline where it was never measured. Lesson: never carry a
+   reduced-build occupancy across to a full build, in either direction.
    **⚠ Confounded: occ-2 run is the REDUCED build, baseline is a FULL build** — two
    changes at once. The control is cheap and should be run before the number is
    quoted: same reduced build, `MB=0`, same par file. (The cut alone is probably
