@@ -1,8 +1,9 @@
 # Checkpoint — AsterX flux-loop optimization (handoff)
 
-_Last updated 2026-07-25. Read this first, then **`compiler-flags.md`** (the
-ACTIVE route: occ-2 via compiler flags, three builds queued),
-`launch-bounds-plan.md` (the FALLBACK if that closes), `profiling-flux-kernel.md`
+_Last updated 2026-07-27. Read this first, then **`launch-bounds-plan.md`** (the
+ACTIVE occupancy route), `compiler-flags.md` (CLOSED on measurement — kept as the
+record of three probes that did not move occupancy, plus the `vbar` finding and
+the fast-math analysis), `profiling-flux-kernel.md`
 (all -Rpass tables + the scratch root-cause), `baseline-timings.md` (CPU/GPU
 timing incl. the occ-2 sign-flip), `flux-construction.md` (the numerical pipeline;
 §10a/§10b/§11a/§11b hold the fusion + `tau` findings), `implementation-history.md`
@@ -43,16 +44,31 @@ Three routes to occ-2-at-low-scratch, in the order they were tried:
    Lesson 8: it deleted values the allocator was already rematerializing, and
    nothing downstream of the flux-assembly waist is in the AGPR overflow set.
    Branch `probe/flux-enthalpy-fusion` kept as the record.
-2. **Compiler flags — ACTIVE, three builds queued.** Own doc:
-   **`compiler-flags.md`**. Attractive because scheduling and register allocation
-   don't alter arithmetic, so a winner should pass golden at **exactly 0** — no
-   rebaseline. The plan's "zero-code pre-check" (`--amdgpu-waves-per-eu`) turned
-   out not to exist; the real candidates are `--misched=gcn-max-occupancy`,
-   `--enable-deferred-spilling`, and inline-threshold tuning.
-3. **`launch_bounds` plumbing — FALLBACK.** `launch-bounds-plan.md`, with two
-   corrections recorded there (the ParallelFor replication must call
-   `amrex::detail::call_f_intvect_handler`; and a 7th template argument breaks the
-   CI build against stock CarpetX).
+2. **Compiler flags — CLOSED on measurement, 2026-07-27.** Own doc:
+   **`compiler-flags.md`** (§SWEEP RESULTS + §VERDICT). All three mechanisms run
+   against the target `uct1` (needs AGPR 32→0):
+   scheduling `--misched=gcn-max-occupancy` = **NULL** (byte-for-byte identical in
+   all 11 kernels — because that strategy is already AMDGPU's *default* machine
+   scheduler, so the flag re-selected what was running);
+   allocation `--enable-deferred-spilling` = **AGPR 32→30**, occ-1, and it made
+   `CalcE uct1` SGPR spills worse (20/22/24 → 30/26/33) → reject;
+   relaxed FP `-ffinite-math-only` = **AGPR 32→34**, occ-1 → negative.
+   Spread across three independent mechanisms: ±2 registers against a 32-register
+   gap. Probe 2 doubled as the positive control (counters moved), so probe 1's null
+   is a real codegen null, not a broken build knob.
+   Two durable findings: the 32 AGPRs are **load-bearing live values, not allocator
+   sloppiness** (the flag that re-ran allocation found 2; the flag that relaxed
+   semantics found −2) — the compiler-side confirmation of Lesson 8; and
+   **TU-scoped flags cannot be aimed at the flux kernel alone** — all 11 kernels
+   live in `fluxes.cxx`, so collateral is unavoidable, which is a *structural*
+   advantage for `launch_bounds`, not merely a strength-of-knob one.
+   ⚠ Probe 3 did not actually test the `vbar` finding: folding `0.0 * x` needs
+   `nsz` (`-fno-signed-zeros`), which `-ffinite-math-only` does not set. Resolve by
+   writing the fix and measuring it, not by another flag build.
+3. **`launch_bounds` plumbing — NOW THE PRIMARY ROUTE** (was the fallback).
+   `launch-bounds-plan.md`, with two corrections recorded there (the ParallelFor
+   replication must call `amrex::detail::call_f_intvect_handler`; and a 7th
+   template argument breaks the CI build against stock CarpetX).
 
 Two by-products worth more than the occupancy hunt so far, both in
 `flux-construction.md`: **`tau` loses up to ~8 digits to cancellation in
@@ -258,38 +274,46 @@ them invalidates golden + baseline.
 
 ## NEXT STEPS for the new agent
 
-1. **IN PROGRESS — compiler-flag probes. Full detail in `compiler-flags.md`.**
-   Three builds queued on `opt/flux-launch-bounds` + `4f902ca1`, run manually via
-   `gmake $CONFIG PROBE_FLAGS="..."`, three different mechanisms so a flat result
-   on all three is conclusive:
-   `-mllvm --misched=gcn-max-occupancy` (scheduling) /
-   `-mllvm --enable-deferred-spilling` (allocation) /
-   `-ffinite-math-only` (dead code, DIAGNOSTIC ONLY — never ship, it folds
-   `isnan()` to false). Reduced-build baseline to beat: `uct1` 256/32/3448/occ-1,
-   needing AGPR → 0; `uct0` is 252/2/3448/occ-2 and acts as a canary.
-2. **The `vbar` fix — independent of the flags, and the only genuine REMOVAL
-   candidate left.** `if constexpr (pplim)` around the UCT drift-velocity fallback
-   kills 12 provably-dead `gf_vels` loads that LLVM cannot remove (`0.0 * x` needs
-   fast-math to fold). Effectively bit-identical → golden should be exactly 0.
-   Recipe in `compiler-flags.md`.
-3. **Re-measure any winner in a FULL build** (comment out
-   `-DASTERX_PROBE_IDEALGAS_ONLY`) before believing it — the reduced build is a
-   different compilation (AGPR 32 vs 40).
-4. Golden gate (flag-only winners should be exactly 0, since scheduling and
-   register allocation don't change arithmetic), then timing at BOTH grid sizes
-   (UCT-small + TOV-large) vs the Idea-1 baseline. Record in `baseline-timings.md`.
-   Note the reduced build IS usable for the timing runs (both are idealgas,
-   `use_pplim=no`, and both CT schemes are compiled) — but remove the `-D` before
-   any test-suite or golden run.
-5. **FALLBACK if nothing reaches occ-2: the `launch_bounds` plumbing**
+1. **DONE — compiler-flag sweep, all 3 probes, route CLOSED and DISMANTLED.**
+   Results and the verdict table are in `compiler-flags.md` (§SWEEP RESULTS,
+   §VERDICT); summary in the STATUS section above. The `PROBE_FLAGS` switchboard
+   and the tiered candidate inventory were **deleted** from
+   `AsterX/src/make.code.deps` and from that doc — deliberately, so nobody
+   re-walks a list measurement has already priced. `make.code.deps` keeps only
+   `-Rpass-analysis=kernel-resource-usage` and `-DASTERX_PROBE_IDEALGAS_ONLY`,
+   which are still what you need to measure anything else. Reduced-build
+   baseline: `uct1` 256/32/3448/occ-1, needing AGPR → 0; `uct0` 252/2/3448/occ-2
+   is the canary.
+2. **IN PROGRESS — the `vbar` fix. Written 2026-07-27, not yet measured.**
+   `if constexpr (pplim)` around the UCT drift-velocity blend in `fluxes.cxx`, so
+   the cell-centred fallback is compiled out of the production kernel instead of
+   multiplied by zero. Kills 12 provably-dead `gf_vels` loads that LLVM cannot
+   remove (`0.0 * x` needs `nnan` **and `nsz`** to fold — which is why probe 3's
+   `-ffinite-math-only` did not test it). Effectively bit-identical → golden
+   should be exactly 0, so it is worth shipping for the removed loads even if
+   AGPR-neutral. **Owed: `-Rpass` on the reduced build (does AGPR move off 32?),
+   then a full build, then golden.** This is the last genuine removal candidate.
+3. **THEN — the `launch_bounds` plumbing, now the primary route**
    (`launch-bounds-plan.md` Changes 1+2) — add a `min_blocks` template param to
    CarpetX `loop_box_device` in the user's fork at `../CarpetX`, routing to AMReX's
-   existing 3-arg `launch_global<NT,MB>`. Two corrections now recorded in that doc:
-   the replication must call `amrex::detail::call_f_intvect_handler` (CarpetX
-   passes an `(i,j,k)` lambda, not the 1D form the plan sketched), and passing a
-   7th template argument **breaks the CI build against stock CarpetX**. The plan's
-   "optional zero-code pre-check" `--amdgpu-waves-per-eu` **does not exist** in
-   this toolchain.
+   existing 3-arg `launch_global<NT,MB>`. Two corrections recorded in that doc: the
+   replication must call `amrex::detail::call_f_intvect_handler` (CarpetX passes an
+   `(i,j,k)` lambda, not the 1D form the plan sketched), and passing a 7th template
+   argument **breaks the CI build against stock CarpetX** — decide the CI story up
+   front. The plan's "optional zero-code pre-check" `--amdgpu-waves-per-eu` **does
+   not exist** in this toolchain. Note the sweep also produced a new argument *for*
+   this route: it is per-launch-site, so unlike a TU flag it cannot damage
+   `CalcE`/`CalcFstag`/`CalcAux`.
+4. **Re-measure any winner in a FULL build** (comment out
+   `-DASTERX_PROBE_IDEALGAS_ONLY`) before believing it — the reduced build is a
+   different compilation (AGPR 32 vs 40).
+5. Golden gate, then timing at BOTH grid sizes (UCT-small + TOV-large) vs the
+   Idea-1 baseline. Record in `baseline-timings.md`. The reduced build IS usable for
+   the timing runs (both are idealgas, `use_pplim=no`, and both CT schemes are
+   compiled) — but remove the `-D` before any test-suite or golden run.
+   **Exit condition:** if `launch_bounds` reaches occ-2 but the small grid still
+   regresses, ship Idea-1 alone (occ-1, low scratch, fusion + `use_pplim` removal
+   already banked) and stop chasing occ-2.
 6. **PR cleanup** (whichever route ships): revert or neutralise `4f902ca1`;
    rewrite the `#if 0` CCTK_DEBUG block (only on the serialization branch); reword
    `[golden-master]`/`PROBE` commit messages for upstream.

@@ -1125,9 +1125,10 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
   }
   // use_pplim=no: the PP-limiter block (and its theta write) is compiled out.
   // theta_x/y/z have no storage in that config (see schedule.ccl); theta is
-  // identically 1.0 and its two consumers -- the upwind-CT drift blend below
-  // and the rhs theta_tot diagnostic -- use that constant directly, so there is
-  // nothing to write here.
+  // identically 1.0, and neither consumer needs to read it -- the upwind-CT
+  // drift blend below specializes on theta == 1.0 (dropping the cell-centred
+  // fallback term outright) and the rhs theta_tot diagnostic uses the constant
+  // directly. So there is nothing to write here.
 
 #ifdef CCTK_DEBUG
   // Recompute the flux-CT induction quantities for diagnostics only. In a
@@ -1256,19 +1257,34 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     // limiter off theta is identically 1.0, so use that constant and never
     // touch the (unstored) GF. For use_pplim=yes this reads the same value as
     // before -> bit-identical per config.
-    CCTK_REAL theta_uct;
-    if constexpr (pplim)
-      theta_uct = gf_theta(dir_i)(p.I);
-    else
-      theta_uct = 1.0;
-    vbar_j(dir_i)(p.I) =
-        theta_uct * vj_face +
-        (1.0 - theta_uct) * 0.5 *
-            (gf_vels(dir_j)(p.I) + gf_vels(dir_j)(p.I - p.DI[dir_i]));
-    vbar_k(dir_i)(p.I) =
-        theta_uct * vk_face +
-        (1.0 - theta_uct) * 0.5 *
-            (gf_vels(dir_k)(p.I) + gf_vels(dir_k)(p.I - p.DI[dir_i]));
+    //
+    // The two branches are also split on pplim so that the cell-centred
+    // velocity fallback is COMPILED OUT of the production kernel rather than
+    // merely multiplied by zero. With theta_uct == 1.0 the blend degenerates to
+    // 1.0 * v_face + 0.0 * (...), and the compiler is NOT allowed to fold the
+    // 0.0 * x away: that needs both nnan (x could be Inf, and Inf * 0 -> NaN)
+    // and nsz (0.0 * x is -0.0 for x < 0, so the product is not a compile-time
+    // constant) -- i.e. fast-math, which this project deliberately does not
+    // enable. So without this branch the 4 gf_vels loads per direction are
+    // required to stay live across the UCT epilogue in a configuration that
+    // provably cannot use them: 12 dead loads in the production kernel.
+    // Bit-identical for pplim=yes (same expression) and exactly equal for
+    // pplim=no on finite data (1.0*x == x, x + 0.0 == x; the sole exception is
+    // x == -0.0, which becomes +0.0, invisible to a norm-based compare).
+    if constexpr (pplim) {
+      const CCTK_REAL theta_uct = gf_theta(dir_i)(p.I);
+      vbar_j(dir_i)(p.I) =
+          theta_uct * vj_face +
+          (1.0 - theta_uct) * 0.5 *
+              (gf_vels(dir_j)(p.I) + gf_vels(dir_j)(p.I - p.DI[dir_i]));
+      vbar_k(dir_i)(p.I) =
+          theta_uct * vk_face +
+          (1.0 - theta_uct) * 0.5 *
+              (gf_vels(dir_k)(p.I) + gf_vels(dir_k)(p.I - p.DI[dir_i]));
+    } else {
+      vbar_j(dir_i)(p.I) = vj_face;
+      vbar_k(dir_i)(p.I) = vk_face;
+    }
   }
 
   /* End code for upwindCT */

@@ -18,18 +18,23 @@ occ-2 wall-clock win, then the upstream PR.
 measurement (CHECKPOINT Lesson 8: the `(H,vf2)` fusion was a byte-for-byte
 `-Rpass` null, because it deleted values the allocator was already rematerializing
 and nothing downstream of the flux-assembly waist is in the AGPR overflow set).
-Two occupancy levers remain: **compiler flags** (ACTIVE — own checkpoint,
-`compiler-flags.md`; attractive because a flag-only winner should pass golden at
-exactly 0) and **`launch_bounds`** (fallback, `launch-bounds-plan.md`).
+Two occupancy levers remained: compiler flags and **`launch_bounds`**.
 
-That probe round also surfaced two items with no performance claim attached:
+**Update 2026-07-27.** The **compiler-flag lever is also closed on measurement** —
+all three mechanisms probed, none moved occupancy (scheduling 0 registers,
+allocation −2 with `CalcE` collateral, relaxed FP +2, against a 32-register gap).
+Its switchboard and candidate list were deleted; `compiler-flags.md` survives as
+the record. **`launch_bounds` (`launch-bounds-plan.md`) is now the only open
+occupancy route.**
+
+That probe round also surfaced two items with no occupancy claim attached:
 - **`tau` conditioning** — first section below. An accuracy defect in shipping code.
 - **the `vbar` dead-code finding** — 12 provably-dead `gf_vels` loads in the UCT
-  block that LLVM cannot remove (`0.0 * x` needs fast-math to fold), fixable
-  bit-identically with `if constexpr (pplim)`. Recorded in `compiler-flags.md`;
-  it is the only genuine REMOVAL candidate still open, and unlike the fusion it
-  removes *memory loads that must stay live*, which is the category Lesson 8 says
-  the allocator actually banks.
+  block that LLVM cannot remove (`0.0 * x` needs `nnan` *and* `nsz` to fold),
+  fixed bit-identically with `if constexpr (pplim)`. **Implemented 2026-07-27,
+  measurement owed.** Unlike the fusion it removes *memory loads that must stay
+  live*, which is the category Lesson 8 says the allocator actually banks — so it
+  is the last genuine REMOVAL candidate, whatever its register outcome.
 
 ## Context
 

@@ -1,9 +1,27 @@
 # Scoped launch_bounds plan — reach occ-2 WITHOUT the serialization scratch
 
-**Status (2026-07-25): DEMOTED TO FALLBACK.** The active route is compiler flags —
-see `compiler-flags.md` — because a flag-only winner needs no CarpetX change, no
-CI-build workaround, and should pass golden at exactly 0. Come back here only if
-those probes all leave `uct1` at occ-1.
+**Status (2026-07-27): PROMOTED BACK TO PRIMARY.** The compiler-flag route is
+closed on measurement — all three probes ran and `uct1` stayed at occ-1
+(scheduling 0 registers, allocation −2 with `CalcE` collateral, relaxed FP +2;
+full tables in `compiler-flags.md` §SWEEP RESULTS). Two results from that sweep
+bear directly on this plan:
+
+- **The 32 AGPRs are load-bearing live values, not allocator sloppiness** — so the
+  premise here is the right one: don't ask the allocator to find registers that
+  aren't there, *force* the occupancy target and let it spill selectively.
+- **A TU-scoped flag cannot be aimed at the flux kernel** — `CalcFluxAll`,
+  `CalcE_impl`, `CalcFstag` and `CalcAux` all live in `fluxes.cxx`, and probe 2
+  measurably damaged `CalcE` (SGPR spills 20/22/24 → 30/26/33) while helping the
+  target by 2. `launch_bounds` is per-launch-site by construction, so it is not
+  merely a stronger knob than a flag — it is the *only* correctly scoped one.
+
+Do the `vbar` source fix first (`compiler-flags.md`, ~10 lines, expected golden 0);
+it is independent of this plumbing and the sweep never validly tested it.
+
+**Status (2026-07-25, superseded): DEMOTED TO FALLBACK.** The active route is
+compiler flags — see `compiler-flags.md` — because a flag-only winner needs no
+CarpetX change, no CI-build workaround, and should pass golden at exactly 0. Come
+back here only if those probes all leave `uct1` at occ-1.
 
 Branch: `opt/flux-launch-bounds` (at `defd9f60`, the Idea-1 low-scratch/occ-1
 state; `4f902ca1` on top adds the inert probe guard). User has a CarpetX fork at

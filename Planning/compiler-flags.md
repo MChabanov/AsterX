@@ -1,9 +1,18 @@
-# Compiler-flag route to occ-2 — checkpoint
+# Compiler-flag route to occ-2 — CLOSED, kept as the record
 
-_Opened 2026-07-25. Sibling of `CHECKPOINT.md`; read that first for the overall
-mission. This doc owns everything about reaching occ-2 on the flux kernel via
-**compiler flags** rather than source changes. `launch-bounds-plan.md` is the
-fallback if this route closes._
+_Opened 2026-07-25, **closed on measurement 2026-07-27**. Sibling of
+`CHECKPOINT.md`; read that first for the overall mission. This doc owned the
+attempt to reach occ-2 on the flux kernel via **compiler flags** rather than
+source changes; all three mechanisms were measured and none moved occupancy
+(§SWEEP RESULTS, §VERDICT). The live occupancy route is now
+`launch-bounds-plan.md`._
+
+_The forward-looking parts of this doc — the `PROBE_FLAGS` switchboard in
+`make.code.deps` and the tiered `-mllvm` candidate inventory — were **deleted**,
+not archived, so nobody re-walks a list that measurement has priced. What remains
+is evidence: the two baselines, the three probe tables, the verdict, the
+`-Rpass` reading recipe (still needed for any future measurement), the `vbar`
+finding, and the fast-math analysis._
 
 ## Why this route exists
 
@@ -68,17 +77,14 @@ Two calibrations that follow:
   **canary**: a flag that helps `uct1` while pushing `uct0` back to occ-1 is
   doing real harm.
 
-## Mechanism — how to run a probe
+## Mechanism — how to measure (kept: still the recipe for any `-Rpass` run)
 
-`AsterX/src/make.code.deps` (LOCAL, uncommitted) carries:
+`AsterX/src/make.code.deps` (LOCAL, uncommitted) carries the two surviving lines:
 
 ```make
 fluxes.cxx.o: CXXFLAGS += -Rpass-analysis=kernel-resource-usage
 fluxes.cxx.o: CXXFLAGS += -DASTERX_PROBE_IDEALGAS_ONLY
-fluxes.cxx.o: CXXFLAGS += $(PROBE_FLAGS)
 ```
-
-so candidates go on the gmake command line, no file edit per probe:
 
 ```bash
 export CACTUS=/ccs/home/mchabanov/EinsteinToolkit/Cactus
@@ -87,11 +93,14 @@ export CONFIG=cray20-adios-register
 
 cd $CACTUS
 rm -f configs/$CONFIG/build/AsterX/fluxes.cxx.o
-gmake $CONFIG PROBE_FLAGS="-mllvm --misched=gcn-max-occupancy" 2>&1 | tee ~/probe.log
+gmake $CONFIG 2>&1 | tee ~/probe.log
 ```
 
 Remarks are emitted during compilation, before linking — safe to `Ctrl-C` once
 they scroll past.
+
+**The `PROBE_FLAGS` switchboard was removed 2026-07-27** along with the `-mllvm`
+candidate inventory, when the route closed (§VERDICT). Do not re-add it.
 
 `-DASTERX_PROBE_IDEALGAS_ONLY` (guard committed as `4f902ca1`, "Only temporary
 trick for testing") cuts 16 instantiations → 2: idealgas, `pplim=0`, **both** CT
@@ -133,23 +142,21 @@ grep -A 12 'Function Name.*CalcFluxAllILb1ELb0E.*idealgas' ~/probe.log \
   | sed 's/.*remark: *//; s/ \[-Rpass.*//'
 ```
 
-## Flag inventory (Frontier, cce/20.0.0 + rocm/6.4.2, gfx90a)
+## Flag inventory — DELETED 2026-07-27
 
-Enumerate with:
+The tiered candidate list (Tier 1 schedulers, Tier 2 allocator options, Tier 2b
+inlining, Tier 3 scheduler weights) and the `llc --help-hidden` enumeration
+recipe were removed when the route closed on measurement. They described work
+that will not be done: every remaining entry was a variation on one of the two
+mechanisms already measured at ±2 registers against a 32-register gap. See
+§SWEEP RESULTS for what was run and §VERDICT for why the rest is not worth a
+build.
 
-```bash
-$ROCM_PATH/llvm/bin/llc -march=amdgcn -mcpu=gfx90a --help-hidden 2>&1 \
-  | grep -iE '^ +--[^ =]*(vgpr|agpr|occup|wave|spill|regalloc|pressure|sched)' | sort -u
-# allowed values for =<value> options (there is no `=help`):
-$ROCM_PATH/llvm/bin/llc -march=amdgcn -mcpu=gfx90a --help-hidden 2>&1 \
-  | grep -A 10 -E '^ +--(vgpr-regalloc|regalloc|split-spill-mode|misched)='
-```
-
-### RULED OUT — do not retry
-
-These exist only as IR **function attributes**, not `-mllvm` cl::opts, so they are
-unreachable without attaching an attribute to the kernel (= the CarpetX plumbing,
-since the kernel is `amrex::launch_global<>` inside AMReX headers):
+One negative result from the inventory is kept, because re-deriving it costs a
+failed build each time. These are IR **function attributes**, not `-mllvm`
+cl::opts, so they are unreachable without attaching an attribute to the kernel
+(which *is* the CarpetX plumbing, since the kernel is `amrex::launch_global<>`
+inside AMReX headers):
 
 - `--amdgpu-waves-per-eu` — hard error: *"Unknown command line argument"*,
   suggested `--amdgpu-dce-in-ra`. **This was the plan's "zero-code pre-check"; it
@@ -157,55 +164,9 @@ since the kernel is `amrex::launch_global<>` inside AMReX headers):
 - `--amdgpu-spill-vgpr-to-agpr`
 - `--amdgpu-num-vgpr` / `--amdgpu-num-sgpr`
 - `--vgpr-regalloc=pbqp` — only `basic`/`greedy`/`fast` are offered for the split
-  AMDGPU allocators. `--regalloc=pbqp` exists globally but AMDGPU overrides with
-  separate `sgpr-`/`vgpr-`/`wwm-regalloc`, so it is likely a silent no-op.
+  AMDGPU allocators.
 - `--amdgpu-schedule-relaxed-occupancy` — *relaxes* occupancy targets, wrong
   direction.
-
-### AVAILABLE — tiered by prior
-
-**Tier 1 — purpose-built occupancy/register schedulers.** A different scheduler,
-not a weight on the default one.
-
-- `--misched=gcn-max-occupancy` — *"Run GCN scheduler to maximize occupancy"*,
-  non-experimental. **Highest prior.**
-- `--misched=gcn-iterative-minreg` — *"minimal register usage"* (experimental)
-- `--misched=gcn-iterative-max-occupancy-experimental`
-
-Caveat on the experimental two: slow to compile, and they can hit their stated
-metric while producing worse code — an occ-2 from those needs the timing run more
-than the others, not less.
-
-**Tier 2 — allocator-side.** Attacks "the allocator gave up finding a coloring".
-
-- `--enable-deferred-spilling` — *"defer the actual code insertion to the end of
-  the allocation. That way the allocator might still find a suitable coloring…
-  because of other evicted variables"*. Directly the failure mode.
-- `--regalloc-eviction-max-interference-cutoff=100000` — the allocator bails after
-  N interferences (default ~10); *"To disable, pass a very large number"*.
-- `--split-spill-mode=size|speed`
-- `--vgpr-regalloc=basic`
-
-**Tier 2b — inlining.** Direct evidence it matters: the instantiation cut, which
-changes *only* inlining of shared callees, moved `uct0` from occ-1 to occ-2.
-
-- `--inline-threshold=100 | 50 | 25`
-
-⚠ Watch **scratch**, not just AGPR: AMDGPU calls need stack frames, so de-inlining
-can convert registers into private memory — the Ideas-2/3 seesaw in a new costume.
-
-**Tier 3 — default-scheduler tuning.** Low prior: the flag list shows AMDGPU
-*already* runs an unclustered-high-register-pressure reduction stage
-(`--amdgpu-disable-unclustered-high-rp-reschedule` exists to turn it off), so the
-scheduler is already fighting this.
-
-- `--amdgpu-schedule-metric-bias=100` — *"Set it to 100 to chase the occupancy
-  only"*
-- `--amdgpu-opt-vgpr-liverange` — *"VGPR liverange optimizations for if-else
-  structure"*; the kernel is branch-heavy (`useLO`, `resetL/R`, the `rec_var`
-  switch, per-direction box guards)
-- `--sink-insts-to-avoid-spills` — sinks "into cycles"; the kernel body is not a
-  loop, so probably inert
 
 **Diagnostics — never ship.**
 
@@ -235,6 +196,10 @@ diagnostic build.
   `flux-construction.md` §10b / §11a.
 - **The one register item it would buy is obtainable exactly.** See the `vbar`
   finding below.
+- **MEASURED 2026-07-27: the register upside is not merely small, it is negative.**
+  `-ffinite-math-only` moved the target from AGPR 32 to **34** (probe 3). Whatever
+  relaxed FP deletes here, the allocator does not turn into occupancy. The case
+  against shipping fast-math is now empirical as well as semantic.
 
 Also note for the record: `-ffp-contract` is unset on Frontier but explicitly
 `off` in the CI CPU config, so **golden = 0 on CI implies nothing about
@@ -243,6 +208,11 @@ claim is CI-scoped only. Fine for the workflow (CI validates, Frontier measures)
 as long as the two are never conflated.
 
 ## The `vbar` finding — a real removal, independent of all flags
+
+**STATUS: IMPLEMENTED in `fluxes.cxx` 2026-07-27 (uncommitted at time of writing);
+`-Rpass` and golden not yet run.** This survives the closure of the flag route —
+it is a source change, and the flag sweep never validly tested it (probe 3 needed
+`-fno-signed-zeros`, see above). Measure it directly.
 
 Found by comparing `uct1` (288 registers) against `uct0` (254): **UCT is the
 expensive config by ~34 registers**, which was not previously documented.
@@ -256,9 +226,12 @@ vbar_j(dir_i)(p.I) = 1.0 * vj_face
 ```
 
 `(1.0 - 1.0)` constant-folds to `0.0`, but **`0.0 * x` cannot be folded away**
-without fast-math, because `x` could be NaN or ±Inf. So the compiler is *required*
-to keep those `gf_vels` loads: 4 per direction, **12 total, provably dead** in the
-production config.
+without fast-math. Two conditions are needed and clang gives neither by default:
+`nnan` (because `x` could be ±Inf and `Inf * 0 → NaN`) **and `nsz`** (because
+`0.0 * x` is `-0.0` for `x < 0`, so the product is not a compile-time constant).
+`-ffinite-math-only` supplies only the first — which is why probe 3 was not a
+valid test of this. So the compiler is *required* to keep those `gf_vels` loads:
+4 per direction, **12 total, provably dead** in the production config.
 
 These are **memory loads that must stay live** across the UCT epilogue — exactly
 the category Lesson 8 says the allocator banks, unlike the rematerializable
@@ -280,16 +253,190 @@ Effectively bit-identical: `1.0*x == x` exactly, and `x + 0.0 == x` except for
 golden compare. **Expect golden = 0.** Affects `uct1` only; `uct0` does not
 compile that block.
 
+## SWEEP RESULTS
+
+All rows are the **reduced build** (`-DASTERX_PROBE_IDEALGAS_ONLY`), so they are
+comparable to each other and to the reduced baseline above — never to the full
+build.
+
+### Probe 1 — `-mllvm --misched=gcn-max-occupancy` — **NULL** (2026-07-27)
+
+| kernel | SGPR | VGPR | AGPR | scratch | spill v/s | occ | vs baseline |
+|---|---:|---:|---:|---:|---:|---:|---|
+| FLUX uct1 pp0 idealgas | 100 | 256 | 32 | 3448 | 0/0 | **1** | identical |
+| FLUX uct0 pp0 idealgas | 100 | 252 | 2 | 3448 | 0/0 | 2 | identical |
+| EMF CalcE uct1 (×3) | 106 | 77 | 1 | 72 | 0/20,22,24 | 5 | identical |
+| EMF CalcE uct0 (×3) | 36 | 16–19 | 0 | 0 | 0/0 | 8 | identical |
+| EMF CalcFstag (×3) | 72 | 52–56 | 0 | 0 | 0/0 | 8 | identical |
+| EMF CalcAux (×2) | 58, 92 | 15, 38 | 0 | 0 | 0/0 | 8 | identical |
+
+**Byte-for-byte identical to the no-flag reduced baseline in every counter of
+every one of the 11 kernels** — not a small move. Target unchanged at
+`uct1` 256/32/3448/occ-1; canary `uct0` unmoved at occ-2. Recompilation is proven
+(remarks are emitted at compile time, so getting output at all proves
+`fluxes.cxx` rebuilt).
+
+**⚠ Probably a null BY CONSTRUCTION — this flag likely re-selects the default.**
+In LLVM's `AMDGPUTargetMachine.cpp`, `GCNTargetMachine::createMachineScheduler`
+already returns `createGCNMaxOccupancyMachineScheduler`, and the same function is
+what the `"gcn-max-occupancy"` `MachineSchedRegistry` entry names. The generic
+`MachineScheduler` pass only overrides the target's choice when `-misched` is
+given — so passing `-misched=gcn-max-occupancy` asks for the strategy that was
+already running. That is consistent with a *perfectly* identical result across
+kernels that have nothing in common, and it is a better explanation than "the
+flag never arrived". Corollary: this probe carries **much less information than
+the STATUS table assumed** — it does not retire the scheduling mechanism, it
+mostly re-ran the baseline. Tier 3's premise ("the scheduler is already fighting
+this") is now direct evidence rather than inference.
+
+**Positive control — SATISFIED by probe 2 (below).** The worry was that
+"default-already" and "flag-never-propagated" predict the same identical output,
+and only one is benign. Probe 2 used the identical mechanism (in-file
+`PROBE_FLAGS ?=` in `make.code.deps`) and **did change counters**, so `-mllvm`
+arguments demonstrably reach the compiler. Probe 1's null is therefore a real
+codegen null, and the default-scheduler explanation stands. No separate control
+build was needed, and none is owed now that the route is closed.
+
+### Probe 2 — `-mllvm --enable-deferred-spilling` — **MOVES, BUT LOSES** (2026-07-27)
+
+| kernel | SGPR | VGPR | AGPR | scratch | spill v/s | occ | vs baseline |
+|---|---:|---:|---:|---:|---:|---:|---|
+| FLUX uct1 pp0 idealgas | 102 | 256 | **30** | 3448 | 0/0 | **1** | SGPR +2, **AGPR −2**, occ unchanged |
+| FLUX uct0 pp0 idealgas | 102 | 251 | 2 | 3448 | 0/0 | 2 | SGPR +2, VGPR −1, occ unchanged |
+| EMF CalcE uct1 (×3) | 106 | 77 | 1 | 72 | 0/**30,26,33** | 5 | **SGPR spills +10/+4/+9 — WORSE** |
+| EMF CalcE uct0 (×3) | 36 | 16–19 | 0 | 0 | 0/0 | 8 | identical |
+| EMF CalcFstag (×3) | 72 | 52–56 | 0 | 0 | 0/0 | 8 | identical |
+| EMF CalcAux (×2) | 58, 92 | 15, 38 | 0 | 0 | 0/0 | 8 | identical |
+
+**Verdict: reject.** The direction is right — this is the first flag to touch the
+target's AGPR at all — but **32 → 30 against a requirement of 32 → 0** is 6% of
+the distance, and occupancy is unchanged on both flux kernels. Meanwhile it
+*costs*: +2 SGPR on both flux kernels and **+4 to +10 SGPR spills in `CalcE uct1`**,
+which is a real traffic increase in a kernel that runs three times per RHS at
+occ-5. Nothing to gain, something to lose.
+
+Two things worth more than the verdict:
+
+- **The allocator-side lever is alive but weak.** Unlike the scheduler (probe 1,
+  already at its occupancy-max default), deferred spilling genuinely changed the
+  allocation and still only found 2 registers. Combined with Lesson 8's "nothing
+  cheap is left to remove", this is evidence that the flux kernel's 32 AGPRs are
+  *load-bearing live values*, not allocator sloppiness. That predicts the
+  remaining Tier-2 flags (`--regalloc-eviction-max-interference-cutoff`,
+  `--vgpr-regalloc=basic`, `--split-spill-mode`) will behave the same way: a
+  couple of registers, not 32. **Nothing in the flag route looks capable of
+  covering a 32-register gap.**
+- **⚠ TU-scoped flags CANNOT be aimed at the flux kernel alone.** `CalcFluxAll`,
+  `CalcE_impl`, `CalcFstag` and `CalcAuxTermsForAvecPsiRHS` all live in
+  `fluxes.cxx`, so every `-mllvm` flag hits all 11 kernels — and probe 2 shows
+  that collateral is not hypothetical. This is a *structural* disadvantage of the
+  flag route versus `launch_bounds`, which is per-launch-site by construction and
+  therefore scoped exactly to the one kernel. Judge any future flag winner on
+  **all 11 rows**, not just the target row.
+
+### Probe 3 — `-ffinite-math-only` — **NEGATIVE** (2026-07-27)
+
+| kernel | SGPR | VGPR | AGPR | scratch | spill v/s | occ | vs baseline |
+|---|---:|---:|---:|---:|---:|---:|---|
+| FLUX uct1 pp0 idealgas | 98 | 256 | **34** | 3448 | 0/0 | **1** | SGPR −2, **AGPR +2 (WORSE)** |
+| FLUX uct0 pp0 idealgas | 98 | 252 | 2 | 3448 | 0/0 | 2 | SGPR −2, else identical |
+| EMF CalcE uct1 (×3) | 106 | 77 | 1 | 72 | 0/**24,22,20** | 5 | same multiset {20,22,24}, permuted across directions |
+| EMF CalcE uct0 (×3) | 36 | 16–19 | 0 | 0 | 0/0 | 8 | identical |
+| EMF CalcFstag (×3) | 72 | 52–56 | 0 | 0 | 0/0 | 8 | identical |
+| EMF CalcAux (×2) | 58, 92 | 15, 38 | 0 | 0 | 0/0 | 8 | identical |
+
+Relaxing FP semantics made the target **worse** (AGPR 32 → 34), traded 2 SGPRs
+for it, and left occupancy at 1. The `CalcE uct1` spill counts are the same three
+values reassigned to different directions — allocation-order noise, not a trend.
+
+**⚠ This probe probably did NOT test what it was designed to test.** The STATUS
+table claimed it would price the `vbar` finding. Re-deriving the fold: turning
+`0.0 * x` into a constant needs `nnan` (so `Inf * 0 → NaN` can't happen) **and
+`nsz`**, because without no-signed-zeros the result is `+0.0` or `-0.0` depending
+on the sign of `x` and is therefore not a compile-time constant.
+`-ffinite-math-only` sets `nnan`/`ninf` but **not `nsz`** — that is
+`-fno-signed-zeros`. So the dead `gf_vels` loads were most likely still required
+to stay live, and the +2 AGPR is unrelated perturbation from other finite-math
+simplifications.
+
+**Do not spend another build closing this gap.** Two ways forward, and the second
+is strictly better:
+
+1. Re-run with `-ffinite-math-only -fno-signed-zeros` (or `-ffast-math`) to make
+   the diagnostic actually valid. Costs a build, answers only a question about a
+   flag we will never ship.
+2. **Just write the `vbar` fix and measure it.** It is ~10 lines of
+   `if constexpr (pplim)` (recipe above), effectively bit-identical, expected
+   golden = 0, and it is *the actual candidate* — the flag was only ever a proxy
+   for it. A direct `-Rpass` on the real change is a definitive answer where the
+   flag is an inference. **Recommended.**
+
+What probe 3 *does* establish, independent of the `vbar` question: **there is no
+free lunch in relaxed FP for this kernel's register pressure.** Whatever
+`-ffinite-math-only` deletes, the allocator does not convert into occupancy — it
+came out 2 AGPRs behind. Combined with the accuracy hazards already documented
+(`isnan()` folding, `tau` cancellation, the eigenvalue discriminant), the case for
+shipping any fast-math flag here is now empirically dead as well as
+theoretically bad.
+
 ## STATUS / next actions
 
 Three builds queued, deliberately three *different mechanisms* so a flat result
 on all three is itself conclusive:
 
-| # | `PROBE_FLAGS` | tests |
-|---|---|---|
-| 1 | `-mllvm --misched=gcn-max-occupancy` | scheduling |
-| 2 | `-mllvm --enable-deferred-spilling` | allocation |
-| 3 | `-ffinite-math-only` | dead code (diagnostic) |
+| # | `PROBE_FLAGS` | tests | result |
+|---|---|---|---|
+| 1 | `-mllvm --misched=gcn-max-occupancy` | scheduling | **NULL** — but ≈ the default; see above |
+| 2 | `-mllvm --enable-deferred-spilling` | allocation | **AGPR 32→30, occ-1. Reject** (costs CalcE spills) |
+| 3 | `-ffinite-math-only` | dead code (diagnostic) | **AGPR 32→34, occ-1. Negative** (and premise flawed) |
+
+## VERDICT: the compiler-flag route is CLOSED (2026-07-27)
+
+All three mechanisms are spent, and the score across 11 kernels is:
+
+| mechanism | best effect on the target (`uct1`, needs AGPR 32→0) |
+|---|---|
+| scheduling | 0 registers (already the default strategy) |
+| allocation | −2 registers, plus +4…+10 SGPR spills in `CalcE uct1` |
+| relaxed FP | **+2 registers** (worse), and never shippable anyway |
+
+Nothing here can cover a 32-register gap; the spread across three independent
+mechanisms is ±2. Two structural findings explain why, and both should be treated
+as settled:
+
+- **The 32 AGPRs are load-bearing live values, not allocator sloppiness.** The one
+  flag that genuinely re-ran the allocation found 2 registers, and the one that
+  relaxed the *semantics* found −2. This is the same conclusion Lesson 8 reached
+  from the source side, now confirmed from the compiler side. Register pressure
+  here is a property of the algorithm's live ranges, not of a bad heuristic.
+- **TU-scoped flags cannot be aimed at the flux kernel.** All 11 kernels compile
+  in `fluxes.cxx`, so every `-mllvm` flag hits `CalcE`/`CalcFstag`/`CalcAux` too,
+  and probe 2 shows that collateral is real. `launch_bounds` is per-launch-site by
+  construction — a structural advantage, not just a stronger knob.
+
+The remaining candidate list has been **deleted, not deferred** (2026-07-27), and
+`PROBE_FLAGS` is gone from `make.code.deps`. Every entry was a variation on one of
+the two mechanisms already measured at ±2, so working down the list buys builds,
+not registers. Treat this route as exhausted: if a future agent wants occupancy,
+the instrument is `launch_bounds`, not another flag.
+
+## NEXT (in order)
+
+1. **Write the `vbar` fix and `-Rpass` it directly.** ~10 lines of
+   `if constexpr (pplim)`, recipe above. This is the last genuine removal
+   candidate and the only outstanding question the flag sweep failed to answer
+   (probe 3's premise was flawed — it needed `-fno-signed-zeros`). Effectively
+   bit-identical → golden expected exactly 0, so it is worth doing on its own
+   merits (12 dead `gf_vels` loads) even at AGPR-neutral.
+2. **`launch-bounds-plan.md` Changes 1+2** — now the primary route, not the
+   fallback. The two corrections recorded there still apply (the replication must
+   call `amrex::detail::call_f_intvect_handler`; a 7th template argument breaks
+   the CI build against stock CarpetX, so decide the CI story up front).
+3. If `launch_bounds` reaches occ-2 at scratch ≈ 3448: golden gate, then timing at
+   **both** grid sizes vs the Idea-1 baseline. If it reaches occ-2 but the small
+   grid still regresses, the honest outcome is to ship Idea-1 alone (occ-1, low
+   scratch, the fusion + `use_pplim` removal already banked) and stop chasing
+   occ-2.
 
 Build 3 is the highest-information diagnostic: a large AGPR drop says the dead
 `vbar` FP is the bulk of the problem and the bit-identical `if constexpr` fix
