@@ -23,10 +23,23 @@ design; the payoff is GPU.
 `loop_box_device` (branch `opt/loop-box-device-min-blocks` @ `19267243`) plus
 `MB=2` at the one fused flux site (AsterX `c96df5d5`) reaches **occ-2 at scratch
 3608 B/lane** (vs the serialization's 4984) and times **−29.1 % on UCT-small** and
-**−27.3 % on TOV-large** for `AsterX_Fluxes` (−7.8 % of total wall clock there),
-with `Z4c_RHS` flat. Both grid sizes win by about the same fraction: the grid-size
-sign flip that defined this investigation was a *scratch* artifact, not a property
-of occ-2. Against the same TOV baseline the serialization managed only −4.8 %.
+**−27.3 % on TOV-large** for `AsterX_Fluxes`, with `Z4c_RHS` flat. Both grid sizes
+win by about the same fraction: the grid-size sign flip that defined this
+investigation was a *scratch* artifact, not a property of occ-2. Against the same
+TOV baseline the serialization managed only −4.8 % — same occupancy, 5.7× less
+benefit, the difference being where the overflow lives.
+
+**⭐ CUMULATIVE, vs the ORIGINAL pre-fusion upstream code** (`baseline-timings.md`
+§Cumulative). Two independent configurations, near-identical decomposition:
+
+| config | `AsterX_Fluxes` | source work (fusion + Idea 1) | occupancy work | cumulative | CCTK total |
+|---|---|---:|---:|---:|---:|
+| UCT-small | 157.3 → 81.96 s | −26.5 % | −29.1 % | **−47.9 %** | **−13.4 %** |
+| TOV-large | 237.4 → 124.85 s | −27.7 % | −27.3 % | **−47.4 %** | **−17.6 %** |
+
+The two halves are near-equal and the two configs agree to 0.5 pp. **The flux
+kernel is no longer the dominant cost**: 47.6 % → 32.7 % of Solve on TOV, 37.8 % →
+24.2 % on the subcycling run — worth weighing before any further flux-kernel work.
 
 **Not yet a finished result.** Both timing runs used the reduced probe build
 against a full-build baseline, so the numbers are (instantiation cut + `MB=2`).

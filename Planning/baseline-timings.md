@@ -342,10 +342,47 @@ The control is unchanged and still owed — same reduced build, `MB=0`, same par
 file — and it now covers both runs at once. Until it is run, both headline numbers
 are (instantiation cut + `MB=2`).
 
-**Correction, same day:** this section first reported −47.4 % against a 237.4 s
-baseline. That was the wrong baseline column; the correct `defd9f60` reference is
-171.6 s, giving −27.3 %. The derived figures (total −7.8 % not −17.6 %, −7.2 pp not
-−15.0 pp) and the "bigger grid, bigger payoff" reading were corrected with it — on
-the right numbers the two grids come out within 2 pp of each other, which is a
-different conclusion. The upside of the fix: 171.6 s is the serialization table's
-baseline too, which is what makes the head-to-head above possible.
+**Reference-point note (resolved, same day).** This section first reported −47.4 %
+against a 237.4 s baseline. That figure is not wrong — 237.4 s is the **pre-fusion
+original** code — it was simply mislabelled as the `defd9f60` baseline. Both
+comparisons are real and are now both recorded: **−27.3 % against `defd9f60`**
+(this section, the incremental effect of occupancy alone) and **−47.4 % against the
+pre-fusion original** (§Cumulative below, the end-to-end effect). The conclusion
+that did change with the relabelling: "bigger grid, bigger payoff" was an artifact
+— against the matched `defd9f60` reference the two grids agree within 2 pp.
+
+### ⭐⭐⭐ Cumulative: pre-fusion original → fused + occ-2 (2026-07-27)
+
+Both configurations timed against the **original upstream code, before the fused
+flux loop**, with the `defd9f60` fusion+Idea-1 state as the midpoint.
+Same iteration in every column (TimerReport headers agree: iteration 3232 /
+t = 484.8 for UCT-small, iteration 128 / t = 5.01953 for TOV):
+
+| config | `AsterX_Fluxes` original | → fusion + Idea 1 (`defd9f60`) | → + scoped `launch_bounds` occ-2 | **cumulative** |
+|---|---:|---:|---:|---:|
+| fixed-metric subcycling / UCT / smaller | 157.335 s | 115.639 s (−26.5 %) | **81.958 s (−29.1 %)** | **−47.9 %** |
+| TOV Z4c / flux-CT / larger | 237.357 s | 171.622 s (−27.7 %) | **124.848 s (−27.3 %)** | **−47.4 %** |
+
+**Two independent configurations, essentially the same decomposition.** The source
+work (fusion + config-gating + `use_pplim` compiled out) is worth ~−27 %, the
+occupancy work another ~−28 %, and they compound to **−47.5 % on the flux kernel**
+in both. That the two halves are near-equal in both configs, and that the two
+configs agree to within 0.5 pp, is strong evidence neither number is a measurement
+artifact.
+
+End-to-end wall clock against the original:
+
+| config | CCTK total | Δ | ODESolvers::Solve | Δ | Fluxes / Solve |
+|---|---:|---:|---:|---:|---|
+| UCT-small | 489.082 vs 564.423 | **−13.4 %** | 339.148 vs 416.709 | −18.6 % | 24.2 % vs 37.8 % (−13.6 pp) |
+| TOV-large | 542.565 vs 658.478 | **−17.6 %** | 382.350 vs 498.430 | −23.3 % | 32.7 % vs 47.6 % (−15.0 pp) |
+
+Non-flux timers are flat against the original too, so the whole gain is the flux
+kernel in both configs: UCT-small `SetMetric` 99.244 vs 99.642, `SourceTerms`
+30.471 vs 30.680, `Con2Prim` group 22.968 vs 23.061; TOV-large **`Z4c_RHS` 83.189
+vs 83.229**, `OutputSilo` 88.218 vs 88.124, `Tmunu` 32.670 vs 32.636.
+
+**The flux kernel has gone from the dominant cost to roughly a quarter/third of
+Solve** — 47.6 % → 32.7 % of Solve on TOV, 37.8 % → 24.2 % on the subcycling run.
+At that point it is no longer the obvious next target, which is worth weighing
+before any further flux-kernel work.
