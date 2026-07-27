@@ -58,6 +58,77 @@ Also note `AMREX_LAUNCH_KERNEL` has **no** min-blocks variant
 replicated rather than a macro reused. `launch_global<max_threads, min_blocks, L>`
 itself is confirmed present in `AMReX_GpuLaunchGlobal.H`.
 
+## IMPLEMENTATION STATUS (2026-07-27)
+
+**Change 1 is COMMITTED AND PUSHED** — CarpetX branch
+**`opt/loop-box-device-min-blocks`** @ `19267243`, off `dev` @ `55e7434e`, on
+`origin` = `MChabanov/CarpetX`. `Loop/src/loop_device.hxx`, +85/−5, single file:
+
+- `loop_box_device` gains `int MB = 0` as the 7th template parameter, before
+  `typename F`.
+- The device lambda is hoisted to a named `kernel` (was passed inline), then
+  `if constexpr (MB == 0)` → the untouched `amrex::ParallelFor<NT>(box, kernel)`
+  path; `else` → the replicated launch.
+- The replication mirrors `ParallelFor<MT>(BoxND, L)` from
+  `AMReX_GpuLaunchFunctsG.H` (~line 1008): `amrex::BoxIndexer indexer(box)`,
+  `amrex::Gpu::makeNExecutionConfigs<NT>(box)`, the grid-stride
+  `icell = NT*blockIdx.x + threadIdx.x + start_idx` guard, and
+  **`amrex::detail::call_f_intvect_handler(kernel, iv, Gpu::Handler(...))`** —
+  correction #1 above, applied.
+- Launch: `amrex::launch_global<NT, MB><<<...>>>` under CUDA;
+  `hipLaunchKernelGGL(HIP_KERNEL_NAME(amrex::launch_global<NT, MB>), ...)` under
+  HIP, where `HIP_KERNEL_NAME` protects the comma from the macro's argument
+  splitting. `AMREX_GPU_ERROR_CHECK()` after the loop.
+- **SYCL/other backends fall back to `ParallelFor<NT>`** — there is no
+  `launch_global` there. MB is a codegen hint, so dropping it costs performance,
+  never correctness.
+- `static_assert(MB >= 0)`; the `#ifndef AMREX_USE_GPU` CPU path and the
+  `gpu_sync_after_every_kernel` tail are untouched.
+
+**Caller audit (settles the blast radius).** Across every sibling thorn there is
+exactly **one** `loop_box_device` call outside `loop_device.hxx` itself:
+`AsterX/src/fluxes.cxx:1534`, the fused flux site, and it passes `<0, 0, 0>` —
+three explicit arguments, everything else defaulted. The 11 internal callers
+(`loop_all_device`, `loop_int_device`, `loop_mixpn_device`, …) all pass
+`<CI, CJ, CK, VS, N, NT>` and deliberately do **not** forward MB. So a 7th
+parameter with a default is safe everywhere, and the flux kernel is reachable
+directly — no wrapper needs plumbing, contrary to what a `loop_mixpn_device`
+call site would have required.
+
+**NOT compile-tested — NOTHING has been compiled.** No ROCm and no Cactus build
+on the dev machine: CarpetX's `agent_scripts/build.sh` aborts with
+`missing required env var: CACTUSX` (and, note for next time, still exits 0 —
+do not read a zero exit from it as a pass). Only a brace/paren balance check and
+a read-through were done. **The Frontier build is the first compile of this code**,
+so expect ordinary first-compile breakage there, most likely candidates:
+`HIP_KERNEL_NAME` not being defined (fallback: the triple-chevron form, which
+`CC -x hip` accepts), or `amrex::min` needing an explicit
+`#include <AMReX_Algorithm.H>`.
+
+**Change 2 (AsterX side) IS APPLIED — `fluxes.cxx` now passes `MB=2`.**
+`grid.loop_box_device<0, 0, 0, /*VS*/ 1, /*N*/ 1, AMREX_GPU_MAX_THREADS, /*MB*/ 2>`
+at the fused flux site, under a loud comment block. Deliberate, at the user's
+instruction, for the Frontier trial:
+
+- **CI WILL FAIL on every job** until the CarpetX branch is upstreamed or this
+  line is reverted — against stock CarpetX the `2` binds to `typename F`, a hard
+  compile error (correction #2). Accepted knowingly; this is not a regression to
+  investigate.
+- `AMREX_GPU_MAX_THREADS` is 256 on Frontier and 0 on CPU builds, and the
+  `static_assert(NT > 0)` sits inside the GPU branch, so writing the default out
+  explicitly reproduces the previous behaviour exactly on both.
+- Revert to `grid.loop_box_device<0, 0, 0>(` before any golden or test-suite run,
+  along with `4f902ca1` and `2fd4595e`.
+
+**To build the trial on Frontier:** point the Cactus CarpetX checkout at
+`opt/loop-box-device-min-blocks` (fetch + checkout in
+`$CACTUS/repos/CarpetX`, or `origin` if the arrangement differs), rebuild, and
+read `-Rpass` for `CalcFluxAll<uct=1,pplim=0,idealgas>`. **Success = occ 2 with
+scratch ~3448** (not 4984). A useful intermediate step if the build misbehaves:
+temporarily set `MB` back to 0 at the call site — that must reproduce
+256/32/3448/occ-1 exactly, which isolates "the replication is wrong" from
+"forcing occ-2 does not help".
+
 ## Goal
 
 Force the fused flux kernel to occ-2 on the **unrolled, constant-index, low-scratch**
