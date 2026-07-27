@@ -81,18 +81,43 @@ fluxes.cxx.o: CXXFLAGS += -DASTERX_PROBE_IDEALGAS_ONLY
 #    hard __launch_bounds__(256,2) constraint is strictly stronger than a
 #    scheduler heuristic.
 #
-#    MANUAL SWEEP MECHANISM: rather than editing this file per candidate, pass the
-#    flags on the gmake command line, e.g.
-#      gmake $CONFIG PROBE_FLAGS="-mllvm --misched=gcn-max-occupancy"
-#    With PROBE_FLAGS unset this line adds nothing, so normal builds are unaffected.
-fluxes.cxx.o: CXXFLAGS += $(PROBE_FLAGS)
+#    SWEEP SWITCHBOARD -- set the candidate for the next probe RIGHT HERE.
+#
+#    Edit PROBE_FLAGS below: uncomment exactly one candidate line (or write your
+#    own), then rebuild just this TU:
+#      rm -f $CACTUS/configs/$CONFIG/build/AsterX/fluxes.cxx.o
+#      gmake $CONFIG 2>&1 | tee ~/probe.log
+#    Remarks are emitted during compilation, before linking -- safe to Ctrl-C once
+#    they scroll past.
+#
+#    `?=` so a command-line assignment still overrides the in-file value when that
+#    is more convenient:
+#      gmake $CONFIG PROBE_FLAGS="-mllvm --enable-deferred-spilling"
+#    With every candidate commented out, PROBE_FLAGS is empty and this adds
+#    nothing -- that empty setting IS the baseline row to compare against.
+#
+#    ⚠ ONE FLAG AT A TIME until something moves. Stacking hides which mechanism
+#    did the work, and (b)/Tier-3 entries are only worth combining once (a) shows
+#    it moves AGPR but falls short. Note the `?=` semantics: if you leave two
+#    candidates uncommented the TOPMOST one wins and the other is silently
+#    ignored, so to combine flags put them on ONE line.
 
-#    Candidates to pass via PROBE_FLAGS (see the tier notes above):
-#      -mllvm --misched=gcn-max-occupancy
-#      -mllvm --misched=gcn-iterative-minreg
-#      -mllvm --enable-deferred-spilling
-#      -mllvm --regalloc-eviction-max-interference-cutoff=100000
-#      -mllvm --inline-threshold=100
-#      -mllvm --amdgpu-schedule-metric-bias=100
-#      -mllvm --amdgpu-opt-vgpr-liverange
-#      -ffinite-math-only      (DIAGNOSTIC only -- kills isnan() detection)
+# --- the three queued probes (Planning/compiler-flags.md, STATUS table) ---------
+# 1. scheduling:
+PROBE_FLAGS ?= -mllvm --misched=gcn-max-occupancy
+# 2. allocation:
+# PROBE_FLAGS ?= -mllvm --enable-deferred-spilling
+# 3. dead code -- DIAGNOSTIC ONLY, never ship (folds isnan() to false):
+# PROBE_FLAGS ?= -ffinite-math-only
+
+# --- baseline (no flags): reduced build must read 256 / 32 / 3448 / occ 1 -------
+# PROBE_FLAGS ?=
+
+# --- further candidates, see the tier notes above -------------------------------
+# PROBE_FLAGS ?= -mllvm --misched=gcn-iterative-minreg
+# PROBE_FLAGS ?= -mllvm --regalloc-eviction-max-interference-cutoff=100000
+# PROBE_FLAGS ?= -mllvm --inline-threshold=100
+# PROBE_FLAGS ?= -mllvm --amdgpu-schedule-metric-bias=100
+# PROBE_FLAGS ?= -mllvm --amdgpu-opt-vgpr-liverange
+
+fluxes.cxx.o: CXXFLAGS += $(PROBE_FLAGS)
