@@ -37,8 +37,8 @@ Two axes: **per-lane vs uniform**, and **on-chip vs off-chip**.
 |---|---|---|
 | **VGPR** (Vector GPR) | **Per-lane** values — each of the 64 lanes has its own copy (per-cell prims, fluxes, coords) | The scarce one. A SIMD has a **512-VGPR pool** shared across resident waves, so `waves ≈ 512 ÷ VGPRs-per-wave` (capped at 8). Max **256** addressable by one wave. |
 | **SGPR** (Scalar GPR) | **Uniform** values — one copy shared by all 64 lanes (loop bounds, base pointers, grid metadata, constants) | Cheap and plentiful (~800/SIMD); rarely the limiter. A small "SGPR Spill" is minor. |
-| **AGPR** (Accumulation VGPR) | A **second** vector register file, originally for matrix (MFMA) accumulation | On gfx90a the compiler repurposes it as **on-chip overflow** when 256 arch-VGPRs aren't enough. arch+acc *both* draw down the 512 pool, so heavy AGPR use crushes occupancy. A loud "kernel too big" signal. |
-| **Scratch (B/lane)** | Per-lane private memory living in **off-chip HBM**, not registers | The true spill. When even VGPR+AGPR can't hold everything, values go to slow global memory. e.g. ~4000 B/lane = every work-item shuttling 4 KB to/from HBM mid-kernel. |
+| **AGPR** (Accumulation VGPR) | A **second** vector register file, originally for matrix (MFMA) accumulation | On gfx90a the compiler repurposes it as **on-chip overflow** when 256 arch-VGPRs aren't enough. arch+acc *both* draw down the 512 pool. **Read it in context** (see below): with VGPR pinned at 256 it is an overflow signal, but under `__launch_bounds__` an even split such as 128/128 is a *healthy* allocation — on-chip spill space in place of off-chip scratch. |
+| **Scratch (B/lane)** | Per-lane private memory living in **off-chip HBM**, not registers | ⚠ **Not necessarily spill** — see the `alloca` note below. When it *is* spill, it is the expensive kind: ~4000 B/lane means every work-item shuttling 4 KB to/from HBM mid-kernel. |
 
 ## Worked examples (from the flux-kernel profile)
 
@@ -56,8 +56,15 @@ Two axes: **per-lane vs uniform**, and **on-chip vs off-chip**.
   — turning an occ-1 double-penalty into latency-hidden throughput.
 - **Granularity:** registers are allocated in fixed granules (~multiples of 8
   VGPR), so usage rounds up and occupancy comes back in steps, not per-register.
-- **VGPRs Spill: 0 can be misleading** — overflow may surface as private
-  *scratch* (see the Scratch row) rather than counted spill instructions.
+- **⚠ `ScratchSize` and the spill counters are SEPARATE fields, and scratch is
+  often not spill at all.** The flux kernel reads 3448 B/lane with *both*
+  `VGPRs Spill: 0` and `SGPRs Spill: 0` — those are private-memory `alloca`s
+  (runtime-indexed stencil arrays that defeat SROA), not spilled registers.
+  Contrast `CalcE`, at 72 B/lane *with* 20–24 SGPR spills, where the scratch
+  really is spill. **Scratch does not cap occupancy either way** — occupancy is
+  VGPR+AGPR (and LDS) only, so "reach occ-2" and "cut scratch" are independent
+  goals. Measured consequence: two builds at the same occ-2 differing only in
+  scratch (3608 vs 4984 B/lane) timed −27 % vs −5 %.
 - **LDS (Local Data Share)** — on-chip scratchpad shared by a workgroup (not
   used by these kernels, LDS Size 0); can also be an occupancy limiter when a
   kernel allocates a lot of it.
@@ -65,13 +72,20 @@ Two axes: **per-lane vs uniform**, and **on-chip vs off-chip**.
 ## occ-2 arithmetic (gfx90a, the flux kernel)
 
 occ ≈ `floor(512 / (VGPR + AGPR))` with **granule rounding** (VGPR granule 8), cap
-8. occ-2 needs granule-rounded `VGPR + AGPR ≤ 256`. VGPR is welded at the 256
-ceiling while demand > 256; the reducible overflow lands in **AGPR**, so the gauge
-is **AGPR → exactly 0**. With AGPR 0, VGPR 253 rounds to 256 → 512/256 = **2 waves**.
-A single residual AGPR rounds up to a granule → total > 256 → back to occ-1 (this
-is why 254 VGPR / 1 AGPR was still occ-1, one granule short). Scratch (HBM spill)
-does NOT change the occupancy count but is a separate latency cost that higher
-occupancy hides.
+8. occ-2 needs granule-rounded `VGPR + AGPR ≤ 256`.
+
+**Two regimes, and the gauge differs between them:**
+
+- *Unconstrained.* VGPR welds at the 256 ceiling while demand exceeds it, so the
+  reducible overflow lands in AGPR and the gauge is **AGPR → exactly 0**. With
+  AGPR 0, VGPR 253 rounds to 256 → 512/256 = 2 waves. A single residual AGPR
+  rounds up to a granule → total > 256 → back to occ-1 (which is why 254 VGPR /
+  1 AGPR was still occ-1, one granule short).
+- *Under `__launch_bounds__(256, 2)`.* The budget is imposed, so the allocator
+  distributes 256 total however it likes — measured **128 VGPR / 128 AGPR with
+  both spill counters 0**, i.e. it used the AGPR half as *on-chip* spill space
+  rather than off-chip scratch. Here a large AGPR count is the good outcome, not
+  overflow. **Do not read "AGPR → 0" as the gauge once occupancy is forced.**
 
 ## NVIDIA H100 / GH100 (sm_90) contrast — TACC Vista
 

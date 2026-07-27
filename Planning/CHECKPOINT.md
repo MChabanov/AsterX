@@ -1,484 +1,285 @@
 # Checkpoint — AsterX flux-loop optimization (handoff)
 
-_Last updated 2026-07-27. Read this first, then **`launch-bounds-plan.md`** (the
-ACTIVE occupancy route), `compiler-flags.md` (CLOSED on measurement — kept as the
-record of three probes that did not move occupancy, plus the `vbar` finding and
-the fast-math analysis), `profiling-flux-kernel.md`
-(all -Rpass tables + the scratch root-cause), `baseline-timings.md` (CPU/GPU
-timing incl. the occ-2 sign-flip), `flux-construction.md` (the numerical pipeline;
-§10a/§10b/§11a/§11b hold the fusion + `tau` findings), `implementation-history.md`
-(provenance), `ideas.md` (future work). `ideas-2-3-serialization.md` = the
-(executed) serialization design note._
+_Last updated 2026-07-27. Read this first. Then: `baseline-timings.md` (all
+timings), `launch-bounds-plan.md` (the winning occupancy change),
+`flux-construction.md` (numerical pipeline; §10b = the open `tau` accuracy fix),
+`profiling-flux-kernel.md` (profiling methodology + EOS occupancy table),
+`ideas.md` (open future work), `implementation-history.md` (provenance),
+`compiler-flags.md` + `ideas-2-3-serialization.md` (records of closed routes),
+`GPUHardwareDict.md` (terminology)._
 
 ## Mission
 
 Optimize `AsterX/src/fluxes.cxx` (the fused flux kernel `CalcFluxAll`), starting
-from bit-identity-gated refactors (golden-master = exactly 0) and now
+from bit-identity-gated refactors (golden-master = exactly 0) and then
 register/occupancy work measured on Frontier/MI250X. CI CPU is cost-neutral by
 design; the payoff is GPU.
 
-## STATUS: ⭐ SOLVED (pending controls) — scoped `launch_bounds` gives occ-2 at low scratch, −29 % / −47 % on the flux kernel
+## STATUS: ⭐ SOLVED (pending controls) — **−47.5 % on the flux kernel**
 
-**Headline, 2026-07-27.** A `min_blocks` template parameter on CarpetX
-`loop_box_device` (branch `opt/loop-box-device-min-blocks` @ `19267243`) plus
-`MB=2` at the one fused flux site (AsterX `c96df5d5`) reaches **occ-2 at scratch
-3608 B/lane** (vs the serialization's 4984) and times **−29.1 % on UCT-small** and
-**−27.3 % on TOV-large** for `AsterX_Fluxes`, with `Z4c_RHS` flat. Both grid sizes
-win by about the same fraction: the grid-size sign flip that defined this
-investigation was a *scratch* artifact, not a property of occ-2. Against the same
-TOV baseline the serialization managed only −4.8 % — same occupancy, 5.7× less
-benefit, the difference being where the overflow lives.
+A `min_blocks` template parameter on CarpetX `loop_box_device` plus `MB=2` at the
+one fused flux site forces **occ-2 at scratch 3608 B/lane** and, combined with the
+earlier fusion work, cuts `AsterX_Fluxes` in half versus the original upstream
+code. Two independent configurations, near-identical decomposition:
 
-**⭐ CUMULATIVE, vs the ORIGINAL pre-fusion upstream code** (`baseline-timings.md`
-§Cumulative). Two independent configurations, near-identical decomposition:
-
-| config | `AsterX_Fluxes` | source work (fusion + Idea 1) | occupancy work | cumulative | CCTK total |
+| config | `AsterX_Fluxes` | fusion + Idea 1 | + occupancy | cumulative | CCTK total |
 |---|---|---:|---:|---:|---:|
-| UCT-small | 157.3 → 81.96 s | −26.5 % | −29.1 % | **−47.9 %** | **−13.4 %** |
-| TOV-large | 237.4 → 124.85 s | −27.7 % | −27.3 % | **−47.4 %** | **−17.6 %** |
+| UCT-small (subcycling) | 157.3 → 82.0 s | −26.5 % | −29.1 % | **−47.9 %** | **−13.4 %** |
+| TOV-large (Z4c, flux-CT) | 237.4 → 124.8 s | −27.7 % | −27.3 % | **−47.4 %** | **−17.6 %** |
 
-The two halves are near-equal and the two configs agree to 0.5 pp. **The flux
-kernel is no longer the dominant cost**: 47.6 % → 32.7 % of Solve on TOV, 37.8 % →
-24.2 % on the subcycling run — worth weighing before any further flux-kernel work.
+The two halves are near-equal, the two configs agree to 0.5 pp, `Z4c_RHS` is flat,
+and in every run the flux delta accounts for the whole `Solve::rhs` delta. Against
+the *same* TOV baseline the serialization route managed only −4.8 % — same
+occupancy, 5.7× less benefit, the difference being purely where the register
+overflow lives. **The flux kernel is no longer the dominant cost** (47.6 % → 32.7 %
+of Solve on TOV, 37.8 % → 24.2 % on subcycling), which is worth weighing before
+any further flux work.
 
-**Not yet a finished result.** Both timing runs used the reduced probe build
-against a full-build baseline, so the numbers are (instantiation cut + `MB=2`).
-The control — same reduced build, `MB=0` — plus a full-build re-measurement and
-the golden gate are what stand between this and a PR. Details in
-`baseline-timings.md`; the history below is kept because the negative results are
-what make the positive one interpretable.
+**Owed before this is quotable / PR-ready:**
 
-## Historical framing: occ-2 is reachable but carries a scratch tradeoff — one route left (`launch_bounds`)
+1. **The `MB=0` control** — same reduced build, same par file. Both timing runs are
+   reduced-build (`-DASTERX_PROBE_IDEALGAS_ONLY`) against a full-build baseline, so
+   the headline is (instantiation cut + `MB=2`). The cut alone is probably worth
+   little (at `MB=0` the reduced build was still 256/32/3448/occ-1, changing neither
+   occupancy nor scratch) but that is inference. One run settles both configs.
+2. **Full-build re-measurement**, including `uct0`'s full-build baseline, never taken.
+3. **Golden gate**, expected exactly 0 (`launch_bounds` is a codegen directive). Needs
+   the probe commits reverted or the CarpetX branch upstreamed — golden CI builds
+   against stock CarpetX.
 
-The production ideal-gas flux kernel was occupancy-bound at **occ-1**. A
-source-only serialization stack (Ideas 1/2/3) reached **occ-2**, but the way it
-got there (rolled loops) traded on-chip registers for **off-chip scratch**, and
-the timing verdict is **grid-size-dependent**:
+## Branches
 
-- **TOV Z4c, flux-CT, larger grid (ideal-gas): occ-2 WON, AsterX_Fluxes −4.8%**
-  (163.3 vs 171.6 s), −1.34 pp of Solve, Z4c untouched (flat).
-- **fixed-metric subcycling, UCT, smaller grid (ideal-gas): occ-2 REGRESSED +8.9%**
-  (137.2 vs 125.9 s), +1.82 pp.
+**AsterX** (`origin` = MChabanov/AsterX), branch **`opt/flux-launch-bounds`**:
 
-So occ-2 helps where there's enough memory latency to hide (large grid) and hurts
-where the extra scratch bandwidth dominates (small grid). And the *genuine* occ-2
-(−4.8%) is far short of the *forced* occ-2 (−15.9%, earlier global-launch_bounds
-test on the same TOV run) — that gap is the scratch. **=> the lever is to reach
-occ-2 WITHOUT the serialization scratch.**
+| commit | content |
+|---|---|
+| `b23fb947`/`e8b0718c`/`4a7e40ec` | CT-scheme split (compute / hoist / storage gating) |
+| `549a28ca` | eigenvalue collapse to `charmax`/`charmin` |
+| `defd9f60` | **Idea 1** — template `use_pplim`, PP compiled out. The occ-1 low-scratch (3448) reference build for every timing comparison. Upstream-bound work ends here. |
+| `4f902ca1` | ⚠ probe guard `ASTERX_PROBE_IDEALGAS_ONLY` (inert without the `-D`) |
+| `2fd4595e` | ⚠ `make.code.deps` — hardwires `-Rpass` + the `-D`; binary **aborts** on pplim/hybrid/tabulated |
+| `c96df5d5` | ⚠ `MB=2` at the flux site — **breaks CI by design**, needs the forked CarpetX |
+| + `vbar` fix | `if constexpr (pplim)` around the UCT drift blend; register-null but keep (12 dead loads) |
 
-### Where that stands as of 2026-07-27 — two of three routes are now closed
+Revert the three ⚠ commits before any golden or test-suite run.
 
-Three routes to occ-2-at-low-scratch, in the order they were tried. **Only #3 is
-still open**, and both closures are measurements, not guesses:
+**CarpetX** (`origin` = MChabanov/CarpetX): **`opt/loop-box-device-min-blocks`** @
+`19267243`, off `dev` @ `55e7434e`, pushed. One file, `Loop/src/loop_device.hxx`.
 
-1. **Source removal — CLOSED on measurement, twice.** (a) The `(H,vf2)` algebraic
-   fusion (`flux-construction.md` §10a/§11a) was a byte-for-byte `-Rpass` null —
-   Lesson 8: it deleted values the allocator was already rematerializing. Branch
-   `probe/flux-enthalpy-fusion` kept as the record. (b) The `vbar` fix
-   (2026-07-27) removed 12 provably-dead *memory loads*, the category Lesson 8
-   said the allocator banks, and was **also byte-for-byte null** — Lesson 9: the
-   register count is peak simultaneous liveness, and the UCT epilogue is past the
-   peak, so position beats category. **No removal candidates remain**: everything
-   at the peak is reconstruction-side, which is separately blocked.
-2. **Compiler flags — CLOSED on measurement, 2026-07-27.** Own doc:
-   **`compiler-flags.md`** (§SWEEP RESULTS + §VERDICT). All three mechanisms run
-   against the target `uct1` (needs AGPR 32→0):
-   scheduling `--misched=gcn-max-occupancy` = **NULL** (byte-for-byte identical in
-   all 11 kernels — because that strategy is already AMDGPU's *default* machine
-   scheduler, so the flag re-selected what was running);
-   allocation `--enable-deferred-spilling` = **AGPR 32→30**, occ-1, and it made
-   `CalcE uct1` SGPR spills worse (20/22/24 → 30/26/33) → reject;
-   relaxed FP `-ffinite-math-only` = **AGPR 32→34**, occ-1 → negative.
-   Spread across three independent mechanisms: ±2 registers against a 32-register
-   gap. Probe 2 doubled as the positive control (counters moved), so probe 1's null
-   is a real codegen null, not a broken build knob.
-   Two durable findings: the 32 AGPRs are **load-bearing live values, not allocator
-   sloppiness** (the flag that re-ran allocation found 2; the flag that relaxed
-   semantics found −2) — the compiler-side confirmation of Lesson 8; and
-   **TU-scoped flags cannot be aimed at the flux kernel alone** — all 11 kernels
-   live in `fluxes.cxx`, so collateral is unavoidable, which is a *structural*
-   advantage for `launch_bounds`, not merely a strength-of-knob one.
-   ⚠ Probe 3 did not actually test the `vbar` finding: folding `0.0 * x` needs
-   `nsz` (`-fno-signed-zeros`), which `-ffinite-math-only` does not set. Resolve by
-   writing the fix and measuring it, not by another flag build.
-3. **`launch_bounds` plumbing — ⭐ BUILT AND MEASURED 2026-07-27: occ-2 REACHED
-   AT LOW SCRATCH.** `launch-bounds-plan.md` §TRIAL RESULT owns the numbers.
-   Production `uct1` went **256/32/3448/occ-1 → 128/128/3608/occ-2** with both
-   spill counters still 0, and **all 9 EMF kernels byte-for-byte unchanged** (they
-   keep `MB=0` and the ordinary `ParallelFor` path). Scratch cost +160 B/lane
-   against the serialization's +1536 for the same occupancy — the Lesson-3(b)
-   hypothesis, confirmed. Implementation: CarpetX branch
-   `opt/loop-box-device-min-blocks` @ `19267243` (pushed, `MChabanov/CarpetX`),
-   AsterX side `c96df5d5` (**breaks CI by design**, needs the forked CarpetX).
-   The two plan corrections held (the replication calls
-   `amrex::detail::call_f_intvect_handler`; the 7th template argument does break
-   stock-CarpetX builds).
-   **⭐ TIMED 2026-07-27, BOTH GRID SIZES WIN — the grid-size sign flip is GONE:**
-   - **UCT-small: `AsterX_Fluxes` −29.1 %** (81.958 vs 115.639 s), −6.8 pp of
-     Solve, −6.3 % CCTK total. **This is the configuration the serialization LOST
-     on (+8.9 %).**
-   - **TOV-large/flux-CT: `AsterX_Fluxes` −27.3 %** (124.848 vs 171.622 s),
-     −7.2 pp of Solve, **−7.8 % CCTK total**, and **`Z4c_RHS` flat at 0.1 %** — the
-     direct demonstration that the scoped version avoids the collateral the old
-     *global* `__launch_bounds__` test paid for its −15.9 %.
-   In both runs every unrelated timer is flat inside ±1 % and the flux delta
-   accounts for the whole `Solve::rhs` delta (−33.7/−34.0 s and −46.8/−47.2 s).
-   Full tables: `baseline-timings.md`.
-   **⭐ Both baselines are the SAME occ-1 full build at `defd9f60`** (the
-   `use_pplim` template commit; `uct1` = 256/40/3448/occ-1) — **not** an occ-2 build
-   and unrelated to the serialization branch. And on TOV that baseline (171.6 s) is
-   the very one the serialization was measured against, so the two occ-2 routes
-   compare head-to-head with no confound: **serialization −4.8 % (scratch 4984) vs
-   scoped `launch_bounds` −27.3 % (scratch 3608)**. Same occupancy, 5.7× the
-   benefit; the entire difference is where the overflow lives. Lesson 3, confirmed
-   as cleanly as it can be.
-   The two grids also land within 2 pp of each other (−29.1 % / −27.3 %), so the
-   serialization's grid-size sign flip was a scratch artifact, not a property of
-   occ-2.
-   **⚠ My prediction that TOV-large would be neutral was WRONG** — it extrapolated
-   `uct0`'s *reduced*-build occ-2 (252/2, previously called threshold luck) to a
-   full-build baseline where it was never measured. Lesson: never carry a
-   reduced-build occupancy across to a full build, in either direction.
-   **⚠ Confounded: occ-2 run is the REDUCED build, baseline is a FULL build** — two
-   changes at once. The control is cheap and should be run before the number is
-   quoted: same reduced build, `MB=0`, same par file. (The cut alone is probably
-   worth little — at `MB=0` the reduced build was still 256/32/3448/occ-1 — but
-   that is inference, not measurement.)
-   Still owed: that control, TOV-large/flux-CT (where `uct0` was already occ-2, so
-   neutral-to-slightly-negative is the expectation, not failure), a full-build
-   re-measurement, and the golden gate (expected exactly 0).
+**Other AsterX branches, kept as records:** `opt/flux-eig-collapse` @ `210a013c`
+(the serialization stack, Ideas 1/2/3 — occ-2 via rolled loops, golden PASS at 0,
+but scratch 4984; `eigenvalues_oneside` exists only here);
+`probe/flux-enthalpy-fusion` @ `659b48b9` (the `(H,vf2)` algebraic fusion, a
+byte-for-byte `-Rpass` null — do not retry, see Lesson 4). **Idea 4** (hoist eig+UCT
+ahead of the assembly) was golden-PASS but occupancy-null and is REVERTED.
 
-Two by-products worth more than the occupancy hunt so far, both in
-`flux-construction.md`: **`tau` loses up to ~8 digits to cancellation in
-production today** (measured `|Q/tau| ~ 5e7`, §10b has a cancellation-free
-rewrite), and the **`vbar` dead-code finding** (`compiler-flags.md`) — 12
-provably-dead `gf_vels` loads that LLVM cannot remove without fast-math, fixable
-bit-identically with `if constexpr (pplim)`.
+## The `-Rpass` progression (production `CalcFluxAll<uct=1,pplim=0,idealgas>`)
 
-## Branches (on `origin` = MChabanov/AsterX)
-
-- **`opt/flux-eig-collapse` (HEAD `210a013c`)** — fusion + CT-split + eig-collapse
-  + Idea 1 (`use_pplim` template) + Idea 2 (flux-by-flux) + Idea 3 (face-state
-  serialize). **occ-2 via serialization, all golden PASS at 0**, but scratch
-  4984 B/lane; large-grid win / small-grid regress. Kept as the serialization
-  record and the large-grid data point.
-- **`opt/flux-launch-bounds` (HEAD `defd9f60`) — the ACTIVE branch.** Reset to the
-  Idea-1 state (fusion + CT-split + eig-collapse + `use_pplim` template + theta
-  storage gating), i.e. **before Ideas 2/3**: occ-1 but **low scratch 3448**,
-  unrolled/constant-index code. This is the clean base for the `launch_bounds`
-  experiment. (`eigenvalues.hxx` here is the both-sides-only original; no
-  `eigenvalues_oneside` — that only exists on `opt/flux-eig-collapse`.)
-- **`probe/flux-enthalpy-fusion` (HEAD `659b48b9`) — MEASURED NULL, keep as record.**
-  Branched off `opt/flux-launch-bounds`. Algebraic removal via the `(H, vf2)`
-  waist (`flux-construction.md` §10a/§11a/§11b): total enthalpy `H = rho*h + b^2`
-  and fast speed `vf2 = cA^2 + cs^2(1-cA^2)` absorb the whole magnetic sector;
-  `cs2_rc`, `h_rc`, `dens_h_W_rc`, `dens_h_W_plus_sqrtg_W2b2_rc` deleted,
-  `B2_rc`/`bsq_rc` demoted to transients, eigenvalue signature 15→9 doubles.
-  **-Rpass: 256/40/3448/occ-1 — IDENTICAL to the Idea-1 baseline in all four
-  counters.** Not bit-identical, so never golden-gated. Do not retry this shape;
-  see Lesson 8. Its *accuracy* findings are real and live on in `ideas.md`.
-- **`4f902ca1` "Only temporary trick for testing"** — sits on top of `defd9f60` on
-  `opt/flux-launch-bounds`. Adds the INERT `ASTERX_PROBE_IDEALGAS_ONLY` guards to
-  `fluxes.cxx`; with `-DASTERX_PROBE_IDEALGAS_ONLY` (set only in the uncommitted
-  `make.code.deps`) the CalcFluxAll instantiation matrix drops 16 → 2 (idealgas,
-  `pplim=0`, both CT schemes) for ~8x faster probe rebuilds. **NOT codegen-neutral:
-  AGPR reads 32 in the reduced build vs 40 in the full one** — see
-  `compiler-flags.md`. Aborts at runtime on pplim/hybrid/tabulated. Revert (or
-  leave inert) before upstreaming.
-
-Commit stack on `opt/flux-eig-collapse`: `b23fb947`/`e8b0718c`/`4a7e40ec` (CT
-split compute/hoist/storage), `549a28ca` (eig-collapse), `defd9f60` (Idea 1),
-`e8613114` (Idea 2), `210a013c` (Idea 3). **Idea 4** (hoist eig+UCT ahead of the
-assembly) was tried, golden-PASS but occupancy-null (pure reorder), and REVERTED.
-
-## The -Rpass progression (production `CalcFluxAll<uct=1,pplim=0,idealgas>`)
+Full build (all 16 instantiations):
 
 | stage | VGPR | AGPR | scratch B/lane | occ |
 |---|---:|---:|---:|---:|
-| eig-collapse (pre-Idea1) | 256 | ~64 | ~3960 | 1 |
-| Idea 1 (template use_pplim) | 256 | 40 | 3448 | 1 |
+| eig-collapse (pre-Idea 1) | 256 | ~64 | ~3960 | 1 |
+| Idea 1 (`defd9f60`) | 256 | 40 | 3448 | 1 |
 | Idea 2 (flux-by-flux `for(j)`) | 254 | 1 | 3816 | 1 |
-| Idea 3 (face `for(f)`) | 253 | 0 | 4984 | 2 |
-| **(H,vf2) fusion, off Idea 1** | **256** | **40** | **3448** | **1** |
+| Idea 3 (face `for(f)`) | 253 | 0 | 4984 | **2** |
+| `(H,vf2)` fusion off Idea 1 | 256 | 40 | 3448 | 1 (null) |
 
-Reduced build (`-DASTERX_PROBE_IDEALGAS_ONLY`, AGPR 32 not 40 — a *different*
-compilation, comparable only within this block):
+Reduced build (`-DASTERX_PROBE_IDEALGAS_ONLY` — a *different compilation*, AGPR 32
+not 40; comparable only within this block):
 
-| stage | VGPR | AGPR | scratch B/lane | occ |
+| stage | VGPR | AGPR | scratch | occ |
 |---|---:|---:|---:|---:|
 | Idea-1 baseline | 256 | 32 | 3448 | 1 |
 | `--misched=gcn-max-occupancy` | 256 | 32 | 3448 | 1 |
 | `--enable-deferred-spilling` | 256 | 30 | 3448 | 1 |
 | `-ffinite-math-only` | 256 | 34 | 3448 | 1 |
-| **`vbar` fix (12 dead loads removed)** | **256** | **32** | **3448** | **1** |
-| **`launch_bounds(256,2)` — MB=2** | **128** | **128** | **3608** | **2** ⭐ |
+| `vbar` fix (12 dead loads removed) | 256 | 32 | 3448 | 1 |
+| **`launch_bounds(256,2)`** | **128** | **128** | **3608** | **2** ⭐ |
 
-Four independent attempts to *coax* the allocator — three compiler-side, one
-source-side — all landed within ±2 of a 32-register gap. **Constraining it
-instead worked on the first try**: total pressure 288 → 256 (exactly the occ-2
-budget), occ 1 → 2, and scratch up only 160 B/lane versus the serialization's
-+1536. The 128/128 split with both spill counters at 0 means the allocator used
-AGPRs as *on-chip* spill space rather than scratch memory — the best available
-outcome. Detail and caveats: `launch-bounds-plan.md` §TRIAL RESULT.
+Other configs: flux-CT+noPP idealgas also reached occ-2 under serialization
+(251/0/4984). PP-on idealgas stays occ-1 (28–29 AGPR; not production).
+**tabulated3d stays occ-1 (AGPR ~172–244), EOS-table-bound — occ-2 is unreachable
+there by any flux change.** hybrid is healthy at 54/0/occ-8.
 
-The fusion row is the Idea-1 row **byte for byte** — a true null, not a small
-move (2026-07-25, `probe/flux-enthalpy-fusion`). Staleness ruled out: `-Rpass`
-remarks are emitted at compile time, so getting output at all proves
-`fluxes.cxx` recompiled.
+## KEY LESSONS
 
-flux-CT+noPP idealgas also hit occ-2 (251/0/4984). PP-on idealgas stays occ-1
-(28-29 AGPR; not production). tabulated3d stays occ-1 (AGPR ~172-244,
-EOS-table-bound — occ-2 unreachable there by any flux change). hybrid 54/0/occ8.
+1. **The allocator banks REMOVAL and STRUCTURAL change, never REORDERING.**
+   Removal (Idea 1, PP compiled out) → AGPR 64→40 *and* scratch 3976→3448, both
+   down. Rolled loops (Ideas 2/3) → AGPR 40→0. Pure reorders (CT-hoist,
+   eig-collapse, Idea 4) → occupancy-null: the allocator re-derives its own
+   schedule. Don't spend effort on reorders or hand-rematerialization. See
+   Lesson 4 for what "removal" actually requires.
 
-## KEY LESSONS (the accumulated knowledge — most important for a new agent)
+2. **Occupancy arithmetic.** `occ = floor(512/(VGPR+AGPR))`, granule-rounded (VGPR
+   granule 8), cap 8. **At occ-1 the gauge was AGPR → exactly 0** — VGPR welds at
+   the 256 ceiling while demand exceeds it, so reducible overflow lands in AGPR,
+   and one residual AGPR granule blocks the crossing (254/1 was still occ-1).
+   **⚠ That gauge does NOT survive `launch_bounds`.** Under `MB=2` the kernel sits
+   at VGPR 128 / AGPR 128 = 256 total = the occ-2 budget, with both spill counters
+   0: the allocator used the AGPR half of the unified gfx90a file as *on-chip*
+   spill space. An even 128/128 split is a healthy allocation, not overflow. Read
+   AGPR as "overflow to drain" only when VGPR is pinned at 256.
 
-1. **The register allocator (cce/gfx90a) banks REMOVAL and STRUCTURAL change, not
-   REORDERING.** REMOVAL (Idea 1, PP compiled out) → AGPR 64→40 AND scratch
-   3976→3448 (genuine, both down). Rolled loops (Ideas 2/3) → AGPR 40→0. Pure
-   reorders (CT-hoist, eig-collapse, Idea-4) → occupancy-null. Don't waste effort
-   on reorders / hand-rematerialization. **⚠ See Lesson 8 — "removal" as stated
-   here is too coarse and cost one wasted probe.**
-2. **occ-2 gauge = AGPR → exactly 0** (VGPR welded at the 256 ceiling; reducible
-   overflow is AGPR). occ = floor(512/(VGPR+AGPR)), granule-rounded (VGPR granule
-   8). At AGPR 0, VGPR 253→256 → 512/256 = 2 waves. One residual AGPR granule
-   blocks it (we sat at 254/1/occ-1 one granule short until Idea 3).
-3. **⚠ THE CENTRAL INSIGHT — serialization RELOCATES, it doesn't REMOVE.** The
-   rolled loops (`#pragma unroll 1`) make the loop indices `f`/`j` RUNTIME
-   variables. **GPU registers cannot be dynamically indexed**, so any array read
-   with a runtime index — the reconstructed vectors (`rho_rc`, `vels_rc`, `Bs_rc`,
-   `vlows_rc`, …) and the cut-set accumulators (`moms_rc`, `flux_moms`, `dens_rc`,
-   …) — is demoted from registers to **scratch (off-chip HBM)**. So AGPR↓ and
-   scratch↑ are the SAME data moving register→scratch, not shrinking. That is why
-   scratch rose 3448→3816→4984 (Idea 3 = +1168, the bulk) while AGPR fell. The
-   *reconstruction arrays* (demoted by the runtime-`f` reads) dominate the scratch;
-   the cut-set is a fraction. Unrolling would put them back in registers (constant
-   index) but then both sides coexist → back to occ-1. **The seesaw:**
-   unrolled = registers/occ-1/low-scratch ; rolled = scratch/occ-2/high-scratch —
-   the data has to live somewhere. The only way to get occ-2 with LOW scratch is
-   (a) genuine removal (exhausted) or (b) `launch_bounds` (force occ-2 on the
-   unrolled kernel, letting the allocator spill SELECTIVELY — hot data stays in
-   registers, only cold values spill). **"(exhausted)" was an assumption when
-   written; it was retested 2026-07-25 (the `(H,vf2)` fusion) and is now CLOSED on
-   measurement — with a REASON, in Lesson 8.**
+3. **Serialization RELOCATES, it doesn't REMOVE — and scratch is independent of
+   occupancy.** Rolled loops (`#pragma unroll 1`) make the indices `f`/`j` runtime
+   variables; GPU registers cannot be dynamically indexed, so every runtime-indexed
+   array (the reconstructed vectors, the cut-set accumulators) is demoted to
+   scratch. AGPR↓ and scratch↑ are the same data moving off-chip, which is why
+   scratch rose 3448→3816→4984. The seesaw: unrolled = registers/occ-1/low-scratch;
+   rolled = scratch/occ-2/high-scratch.
+   Two refinements, both measured:
+   - **The baseline 3448 B/lane is `alloca`, NOT spill** — `-Rpass` reports
+     `ScratchSize` and spill counts separately, and the baseline reads 3448 with
+     *both* spill counters 0. Those ~431 doubles/lane are private-memory
+     allocations, almost certainly the ReconX stencil arrays whose runtime-indexed
+     6-point loops defeat SROA. So a large part of the reconstruction state was
+     *already* in scratch before Ideas 2/3; read 3448→4984 as an increment on a
+     pre-existing floor. (Contrast `CalcE uct1`: 72 B/lane *with* 20–24 SGPR
+     spills — that kernel's scratch really is spill.)
+   - **Occupancy and scratch are INDEPENDENT levers.** Occupancy is VGPR+AGPR (and
+     LDS) only. "Reach occ-2" and "beat 4984 B/lane" are separate criteria — the
+     first is occupancy, the second is the timing/bandwidth cost that made the
+     small grid regress. Never conflate them.
+   **This lesson is now confirmed end-to-end:** occ-2 at 3608 B/lane timed −27.3 %
+   on TOV where occ-2 at 4984 timed −4.8 %. Occupancy was never the problem; the
+   scratch was.
 
-   **⚠ CORRECTION 2026-07-25 — the baseline 3448 is `alloca`, NOT spill, and
-   scratch does NOT cap occupancy.** The `-Rpass` block reports spill counts and
-   `ScratchSize` as SEPARATE fields, and the baseline flux kernel reads
-   **scratch 3448 with `VGPRs Spill: 0` AND `SGPRs Spill: 0`**. If VGPRs were
-   being spilled to scratch, `VGPRs Spill` would be non-zero. So those 3448
-   B/lane (~431 doubles/lane) are private-memory ALLOCATIONS, almost certainly
-   the ReconX stencil arrays — runtime-indexed loops over the 6-point stencil
-   defeat SROA and force them to private memory. Two things follow:
+4. **⚠ REMOVAL ONLY COUNTS AT THE PRESSURE PEAK — position beats category.**
+   Register count is the maximum number of values live *at one point*. The peak is
+   the **reconstruction** state (S2–S6, longest and most-interfering live ranges).
+   Anything born and consumed downstream of the flux-assembly waist occupies
+   registers that are already free, so removing it lowers total work but never the
+   peak. Measured twice, from two different directions:
+   - the `(H,vf2)` algebraic fusion deleted `h_rc`, `B2_rc`/`bsq_rc`,
+     `dens_h_W_rc`, the inlined `a_m`/`a_p`/`det` transients — all of which the
+     allocator was **already rematerializing** — and was byte-for-byte null;
+   - the `vbar` fix deleted **12 provably-dead global loads**, i.e. values that
+     *cannot* be rematerialized, and was **also** byte-for-byte null.
+   So the load-vs-arithmetic distinction is irrelevant; only position is. Idea 1
+   worked because compiling out `pplim` deleted a duplicated copy of the whole
+   S5–S9 chain *including its own reconstruction state* — not because it deleted a
+   dozen doubles of algebra. A count of names in the source is not a count of
+   values in registers.
+   **Consequence: source-level removal is CLOSED with no candidates left.**
+   Everything at the peak is reconstruction-side, and that path is separately
+   blocked (see "Ideas considered and set aside"). Before proposing any removal,
+   ask *where* it lives relative to the peak.
+   Corollary for the *scratch* problem: reconstruction-side data removal would cut
+   the 3448 B/lane of `alloca` more than it cuts registers — a different change
+   from anything tried. Dump the ISA before guessing:
+   `v_accvgpr_read/write_b32` shows what is truly AGPR-resident, `scratch_load/store`
+   what is in private memory.
 
-   - **The seesaw is real but SMALLER than "the data has to live somewhere"
-     implies.** A large part of the reconstruction state was ALREADY in scratch
-     before Ideas 2/3; the rolled loops added ~1536 B/lane *on top of* an
-     existing 3448 rather than moving the bulk of it there. Read the
-     3448→3816→4984 progression as an increment on a pre-existing floor.
-   - **Occupancy and scratch are INDEPENDENT levers.** AMD occupancy is set by
-     VGPR+AGPR (and LDS), not private memory. Reaching occ-2 is purely the
-     "clear the 256-register cliff" problem; scratch is a latency/bandwidth cost
-     that is what made the small grid regress (+8.9%). So "beat 4984" is a
-     TIMING criterion, not an occupancy one — do not conflate them.
+5. **⭐ CONSTRAINING THE ALLOCATOR BEAT COAXING IT, decisively.** Four independent
+   attempts to persuade the allocator to find 32 registers — three compiler-side
+   (scheduling, allocation, relaxed FP) and one source-side (`vbar`) — all landed
+   within ±2 registers of the 32-register gap. A hard `__launch_bounds__(256,2)`
+   found all 32 on the first try. The registers were not recoverable by *asking*;
+   the peak was compressible once a budget was *imposed*. Two supporting findings:
+   - **The 32 AGPRs were load-bearing live values, not allocator sloppiness** — the
+     one flag that genuinely re-ran allocation found 2 registers; the one that
+     relaxed semantics found −2.
+   - **TU-scoped flags cannot be aimed at one kernel.** `CalcFluxAll`,
+     `CalcE_impl`, `CalcFstag` and `CalcAux` all live in `fluxes.cxx`, so every
+     `-mllvm` flag hits all 11 kernels — and `--enable-deferred-spilling`
+     measurably damaged `CalcE` (SGPR spills 20/22/24 → 30/26/33) while helping the
+     target by 2. `launch_bounds` is per-launch-site by construction: measured
+     zero collateral, all 9 EMF kernels byte-for-byte unchanged, `Z4c_RHS` flat in
+     timing. That is structural, not merely a stronger knob.
 
-   Comparison point (reduced build, 2026-07-25): `CalcE uct1` sits at 72 B/lane
-   scratch WITH 20-24 SGPR spills at occ 5 — i.e. that kernel's scratch really is
-   spill. The flux kernel's is not.
-4. **Production is upwind-CT (`use_uct=yes`), `use_pplim=no`, ideal-gas +
-   tabulated3d.** Default `use_pplim=no` and no test par overrides it, so the
-   golden gate exercises the production `pplim=false` kernel; `theta_x/y/z` +
-   `theta_tot` are not in the golden .tsv set (made the theta storage-gating safe).
-5. **Bit-identity of serialization** holds under `-ffp-contract=off` (rolled loops
-   reorder independent sub-computations, never reassociate within an expression;
-   per-side contractions reuse the SAME scalar `calc_contraction` overloads in
-   `AsterUtils/src/aster_utils.hxx`; eigenvalue sides independent). But the
-   `CCTK_DEBUG` NaN-dump on `opt/flux-eig-collapse` is disabled (`#if 0`) because
-   it references now-serialized quantities — rewrite before upstreaming.
-6. **NVIDIA H100/GH100 has no AGPR** (unified 64K-reg file, 255/thread, spill to
-   cached local mem). AGPR-drain framing is AMD-only; on Hopper measure
-   `registers/thread` + spill bytes via `--resource-usage`. Detail: `GPUHardwareDict.md`.
-7. **My hand double-counts were unreliable** (predicted Idea-2 40→16, got 40→1;
-   predicted Idea-3 net ~0-6, got occ-2). Trust `-Rpass` + timing, not arithmetic.
-8. **⚠ REMOVAL ONLY COUNTS IF THE DATA IS RESIDENT IN THE OVERFLOW SET.**
-   **⚠ SUPERSEDED IN PART BY LESSON 9 — read that first.** This lesson's
-   load-vs-rematerializable-arithmetic distinction turned out not to be the
-   operative one; *position relative to the pressure peak* is. Lesson 8's
-   conclusions about the fusion remain correct, but its prediction that removing
-   non-rematerializable memory loads would work was tested and failed. Sharpens
-   Lesson 1, learned the expensive way from the null in the `-Rpass` table above.
-   What the allocator banks is removal of **long-lived values that are expensive to
-   REMATERIALIZE**. Removing a source-level value that is short-lived, or cheaply
-   recomputable from operands that stay live anyway, is indistinguishable from a
-   reorder → exactly zero. The fusion deleted `h_rc` (`1+eps+p/rho`: two flops
-   from live inputs), `B2_rc`/`bsq_rc` (contractions of live `Bs_rc`/`Blows_rc`/
-   `alp_b0_rc`/`W`), `dens_h_W_rc` and `dens_h_W_plus_sqrtg_W2b2_rc` (products of
-   live values), and the inlined eigenvalue transients `a_m/a_p/det`. The
-   allocator was **already rematerializing every one of those**; only `cs2_rc` (an
-   EOS call) was expensive, and that is 2 doubles. A count of NAMES IN THE SOURCE
-   is not a count of VALUES IN REGISTERS.
-   **Corollary — where the 40 AGPRs actually are.** Everything the fusion touched
-   is downstream of reconstruction. Per Lesson 3 the overflow set is the
-   *reconstruction* state (S2–S6, longest and most-interfering live ranges); Idea 1
-   moved AGPR 64→40 because compiling out `pplim` deleted a duplicated copy of the
-   whole S5–S9 chain *including its own reconstruction state*, not because it
-   deleted a dozen doubles of algebra. **Nothing downstream of the §10a waist is in
-   the overflow set, so no amount of algebraic fusion there will move AGPR.**
-   Route (a) of Lesson 3 is now genuinely CLOSED: the only removable data that
-   matters is reconstruction-side, and that path is separately blocked (both-sides
-   `reconstruct()`, `useLO` OR-over-both-sides, ReconX risk — see "Ideas considered
-   and set aside"). Compiler flags (`compiler-flags.md`) and `launch_bounds`
-   (route b) are the remaining levers.
-   **⚠ Caveat on the corollary, 2026-07-25.** Per the Lesson-3 correction the
-   baseline 3448 B/lane is `alloca`, not spill — so the ReconX stencil arrays are
-   ALREADY in private memory, not in the AGPR overflow. That means
-   reconstruction-side *data removal* would cut scratch traffic (the small-grid
-   regression lever) more than it cuts registers (the occupancy lever). Those may
-   be two separate wins needing two separate changes. Before spending effort on
-   either, dump the ISA and look: `v_accvgpr_read/write_b32` shows what is truly
-   AGPR-resident, `scratch_load/store` shows what is in private memory. Stop
-   inferring from counters — that is what produced the two wrong predictions.
+6. **⚠ A REDUCED BUILD IS A DIFFERENT COMPILATION — never carry occupancy across.**
+   `-DASTERX_PROBE_IDEALGAS_ONLY` cuts 16 instantiations → 2 and moves AGPR 40→32
+   with no flags, because inlining of the shared ReconX/EOS callees changes (LLVM
+   scores call sites partly on user count). This cost one wrong prediction: `uct0`
+   reads 252/2/occ-2 in the reduced build (two registers under the cliff, i.e.
+   threshold luck), which was extrapolated to a full-build baseline where it had
+   never been measured — predicting TOV-large would be neutral, where it measured
+   −27.3 %. Reduced-build rows are comparable to each other only.
 
-9. **⚠ REGISTERS ARE SET BY PEAK SIMULTANEOUS LIVENESS — POSITION BEATS
-   CATEGORY.** The final sharpening of Lessons 1/8, measured 2026-07-27 by the
-   `vbar` fix. That change deleted **12 provably-dead global loads** from the
-   production kernel (`if constexpr (pplim)` around the UCT drift blend, so the
-   cell-centred fallback is compiled out instead of multiplied by zero) and the
-   `-Rpass` result was **byte-for-byte identical in all 11 kernels** —
-   256/32/3448/occ-1 unchanged.
-   Lesson 8 predicted this would work: unlike the `(H,vf2)` fusion's
-   rematerializable algebra, these were *memory loads that cannot be
-   rematerialized*, "exactly the category the allocator banks". **That prediction
-   was wrong, and the load-vs-arithmetic distinction is not the operative one.**
-   AGPR count = the maximum number of values live *at one point*. The pressure
-   peak is the reconstruction state (S2–S6). The UCT epilogue runs *after* flux
-   assembly, i.e. after the peak, so values born and consumed there occupy
-   registers that are already free — removing them lowers total work, never the
-   peak, and therefore never the register count.
-   **Operational rule: before proposing any removal, ask WHERE it lives relative
-   to the reconstruction peak, not what kind of value it is.** Everything
-   downstream of the flux-assembly waist — algebra (Lesson 8) *and* memory loads
-   (this lesson) — is register-null. That is now measured twice from two
-   different directions.
-   **Consequence: route (a) of Lesson 3, "genuine removal", is CLOSED with no
-   candidates remaining.** The `vbar` fix was the last one. Every removable thing
-   at the peak is reconstruction-side, and that path is separately blocked
-   (both-sides `reconstruct()`, `useLO` OR-over-both-sides, ReconX risk — see
-   "Ideas considered and set aside"). Combined with the compiler-flag route
-   closing the same day, **`launch_bounds` is the only remaining occupancy lever.**
-   Corollary for the *scratch* problem (the small-grid regression, a separate
-   criterion per the Lesson-3 correction): reconstruction-side data removal would
-   cut the 3448 B/lane of `alloca`, and that is a different change from anything
-   tried so far. Dump the ISA before guessing — `v_accvgpr_read/write_b32` shows
-   what is truly AGPR-resident, `scratch_load/store` what is in private memory.
+7. **Trust `-Rpass` and timing, not arithmetic.** Hand double-counts were wrong in
+   both directions: predicted Idea-2 AGPR 40→16, got 40→1; predicted Idea-3 net
+   ~0–6, got occ-2; predicted the fusion at 24–28 registers, got 0.
 
-## Ideas considered and set aside (do not re-derive from scratch)
+8. **Production is upwind-CT (`use_uct=yes`), `use_pplim=no`, ideal-gas +
+   tabulated3d.** No test par overrides `use_pplim`, so the golden gate exercises
+   the production `pplim=false` kernel, and `theta_x/y/z` + `theta_tot` are not in
+   the golden `.tsv` set (which is what made theta storage-gating safe). Measured
+   aside: **UCT is the expensive CT config by ~34 registers** (`uct=1` totals 288
+   against `uct=0` at 254 in the reduced build).
 
-- **Per-side (incremental) Riemann combine** — accumulate `fsum=flux0+flux1`,
-  `vacc=var1-var0` per side, apply `c`/`0.5` post-loop. Bit-identical for LxF
-  (NOT the naive `0.5*flux0+0.5*flux1` — that reassociates); HLLE saves less
-  (per-side coeffs `charmax/-charmin` don't separate). Trims the both-sides
-  cut-set ~7-14 doubles (~15% of the scratch increase) but NOT the dominant
-  reconstruction-array scratch → partial, not worth the redo.
-- **Grade the atmosphere once at the face** (instead of per cell-center) — a
-  physically-defensible SCHEME change (non-bit-identical → needs maintainer
-  sign-off + physics validation, not golden=0); modest compute win (halves the
-  atmosphere `pow`s). Out of the bit-identical track.
-- **Full per-side kernel rewrite touching reconstruction** — blocked by (a) the
-  `useLO`/velocity-limit fallback being an OR over BOTH sides (reconstruction is
-  inherently both-sides; `reconstruct()` returns both), (b) constant-index
-  two-block unroll relies on the allocator NOT interleaving (likely occ-null, à la
-  Idea 4) unless forced by `noinline` (a dead probe), + huge bit-identity/ReconX
-  risk. Not recommended.
+9. **Bit-identity scoping.** The serialization is bit-identical under
+   `-ffp-contract=off`: rolled loops reorder independent sub-computations without
+   reassociating within an expression, per-side contractions reuse the same scalar
+   `calc_contraction` overloads (`AsterUtils/src/aster_utils.hxx`), and the
+   eigenvalue sides were already independent. **But `-ffp-contract` is unset on
+   Frontier (so FMA contraction is ON) and explicitly `off` in the CI CPU config —
+   golden = 0 on CI implies nothing about bit-identity of the Frontier binary.**
+   CI validates, Frontier measures; never conflate the two.
+
+10. **NVIDIA H100/GH100 has no AGPR** (unified 64K register file, 255/thread, spills
+    to cached local memory). The AGPR framing is AMD-only; on Hopper measure
+    `registers/thread` + spill bytes via `--resource-usage`. Detail:
+    `GPUHardwareDict.md`.
+
+## Ideas considered and set aside (do not re-derive)
+
+- **Per-side (incremental) Riemann combine** — accumulate `fsum`/`vacc` per side,
+  apply `c`/`0.5` post-loop. Bit-identical for LxF (but *not* the naive
+  `0.5*flux0+0.5*flux1`, which reassociates); HLLE saves less since the per-side
+  coefficients don't separate. Trims the both-sides cut-set ~7–14 doubles, i.e.
+  ~15 % of the scratch increase, but not the dominant reconstruction-array
+  scratch → not worth the redo.
+- **Grade the atmosphere once at the face** — a defensible *scheme* change
+  (non-bit-identical, needs maintainer sign-off + physics validation); modest
+  compute win (halves the atmosphere `pow`s). Outside the bit-identical track.
+- **Full per-side kernel rewrite touching reconstruction** — blocked by the
+  `useLO`/velocity-limit fallback being an OR over BOTH sides (`reconstruct()`
+  returns both), plus a constant-index two-block unroll relying on the allocator
+  not interleaving (likely occ-null à la Idea 4), plus large bit-identity/ReconX
+  risk. The GF-reuse variant is assessed in `ideas.md`; `launch_bounds` obtained
+  the same occupancy for a fraction of the effort, so this is now moot.
 
 ## FP-determinism prerequisite (do not undo)
 
-CI cpu config compiles C++ with `-ffp-contract=off`, no `-funsafe-math` (`scripts/
-actions-cpu-real64.cfg`); golden `.tsv` regenerated under those flags. Changing
-them invalidates golden + baseline.
+The CI cpu config compiles C++ with `-ffp-contract=off` and no `-funsafe-math`
+(`scripts/actions-cpu-real64.cfg`); the golden `.tsv` were regenerated under those
+flags. Changing them invalidates golden and the baseline.
 
 ## How to operate
 
-- **Golden check:** `[golden-master]` in the HEAD commit message of the push. Pass
-  = `2235 ok, 0 fail`, worst `|abs|=|rel|=0`, np1+np2, cpu/rocm/cuda. Watch
-  `gh run watch <id> --exit-status`. All Ideas 1/2/3 passed.
-- **-Rpass (user drives on Frontier):** `fluxes.cxx.o: CXXFLAGS +=
-  -Rpass-analysis=kernel-resource-usage` in `AsterX/src/make.code.deps` (local,
-  not committed). `c++filt`; `Lb1E`=true/`Lb0E`=false → `CalcFluxAll<uct,pplim,EOS>`.
-  frontier.cfg DEBUG=no (production-path numbers).
-- **Timing (user drives):** side-by-side final TimerReport, same iteration; judge
-  by `AsterX_Fluxes / ODESolvers::Solve*` fraction (`_Subcycling` for subcycling).
+- **Golden check:** put `[golden-master]` in the HEAD commit message of the push.
+  Pass = `2235 ok, 0 fail`, worst `|abs|=|rel|=0`, np1+np2, cpu/rocm/cuda. Watch
+  with `gh run watch <id> --exit-status`. All of Ideas 1/2/3 passed.
+- **`-Rpass` (user drives on Frontier):**
+  `fluxes.cxx.o: CXXFLAGS += -Rpass-analysis=kernel-resource-usage` in
+  `AsterX/src/make.code.deps`. Demangle with `c++filt`; `Lb1E`=true / `Lb0E`=false
+  → `CalcFluxAll<uct,pplim,EOS>`. frontier.cfg has DEBUG=no, so the numbers are
+  production-path. Remarks are emitted at compile time, so getting output at all
+  proves the TU recompiled. Parsing gotchas and the extraction one-liner:
+  `compiler-flags.md`.
+- **Timing (user drives):** side-by-side final TimerReport, same iteration; judge by
+  `AsterX_Fluxes` and its fraction of `ODESolvers::Solve*` (`_Subcycling` for the
+  subcycling test). Confirm comparability by checking that unrelated timers are flat.
 
-## NEXT STEPS for the new agent
+## NEXT STEPS
 
-1. **DONE — compiler-flag sweep, all 3 probes, route CLOSED and DISMANTLED.**
-   Results and the verdict table are in `compiler-flags.md` (§SWEEP RESULTS,
-   §VERDICT); summary in the STATUS section above. The `PROBE_FLAGS` switchboard
-   and the tiered candidate inventory were **deleted** from
-   `AsterX/src/make.code.deps` and from that doc — deliberately, so nobody
-   re-walks a list measurement has already priced. `make.code.deps` keeps only
-   `-Rpass-analysis=kernel-resource-usage` and `-DASTERX_PROBE_IDEALGAS_ONLY`,
-   which are still what you need to measure anything else. Reduced-build
-   baseline: `uct1` 256/32/3448/occ-1, needing AGPR → 0; `uct0` 252/2/3448/occ-2
-   is the canary.
-2. **DONE — the `vbar` fix: written and measured 2026-07-27. Register NULL.**
-   `if constexpr (pplim)` around the UCT drift-velocity blend in `fluxes.cxx`, so
-   the cell-centred fallback is compiled out of the production kernel instead of
-   multiplied by zero. Removed 12 provably-dead `gf_vels` loads and **moved not
-   one counter** (all 11 kernels identical) → **Lesson 9**, and route (a) "genuine
-   removal" is now closed with no candidates left.
-   **Keep the change**, with the claim restated: bit-identical, deletes 12 real
-   global loads (traffic, which `-Rpass` does not measure), removes a
-   multiply-by-zero. **No occupancy claim.** Still owed for it: a full build (the
-   reduced build never instantiates the `pplim=true` branch, which is where
-   bit-identity has to hold exactly) and a golden gate, expected exactly 0. Do not
-   spend a dedicated timing run on it — fold it into the next one.
-3. **DONE — the `launch_bounds` plumbing: BUILT, occ-2 AT LOW SCRATCH** (see the
-   STATUS section and `launch-bounds-plan.md` §TRIAL RESULT).
-   **NEXT ACTION IS TIMING**, at both grid sizes, vs the Idea-1 baseline, recorded
-   in `baseline-timings.md`. Reference points: forced occ-2 via a *global*
-   `__launch_bounds__` measured −15.9% on TOV (with Z4c collateral this scoped
-   version avoids); occ-2 via serialization only −4.8% because of scratch. This
-   sits at 3608 B/lane, near the low-scratch end. Also owed: a **full-build**
-   re-measurement (record `uct0`'s full-build baseline too — it was never taken),
-   then the golden gate, which is expected at exactly 0 since `launch_bounds` is a
-   codegen directive.
-   Historical plan detail below:
-   **THE ORIGINAL PLAN — the `launch_bounds` plumbing, now the primary route**
-   (`launch-bounds-plan.md` Changes 1+2) — add a `min_blocks` template param to
-   CarpetX `loop_box_device` in the user's fork at `../CarpetX`, routing to AMReX's
-   existing 3-arg `launch_global<NT,MB>`. Two corrections recorded in that doc: the
-   replication must call `amrex::detail::call_f_intvect_handler` (CarpetX passes an
-   `(i,j,k)` lambda, not the 1D form the plan sketched), and passing a 7th template
-   argument **breaks the CI build against stock CarpetX** — decide the CI story up
-   front. The plan's "optional zero-code pre-check" `--amdgpu-waves-per-eu` **does
-   not exist** in this toolchain. Note the sweep also produced a new argument *for*
-   this route: it is per-launch-site, so unlike a TU flag it cannot damage
-   `CalcE`/`CalcFstag`/`CalcAux`.
-4. **Re-measure any winner in a FULL build** (comment out
-   `-DASTERX_PROBE_IDEALGAS_ONLY`) before believing it — the reduced build is a
-   different compilation (AGPR 32 vs 40).
-5. Golden gate, then timing at BOTH grid sizes (UCT-small + TOV-large) vs the
-   Idea-1 baseline. Record in `baseline-timings.md`. The reduced build IS usable for
-   the timing runs (both are idealgas, `use_pplim=no`, and both CT schemes are
-   compiled) — but remove the `-D` before any test-suite or golden run.
-   **Exit condition:** if `launch_bounds` reaches occ-2 but the small grid still
-   regresses, ship Idea-1 alone (occ-1, low scratch, fusion + `use_pplim` removal
-   already banked) and stop chasing occ-2.
-6. **PR cleanup** (whichever route ships): revert or neutralise `4f902ca1`;
-   revert `2fd4595e` (`make.code.deps` — still hardwires `-Rpass` +
-   `-DASTERX_PROBE_IDEALGAS_ONLY`, so the binary aborts on pplim/hybrid/tabulated);
-   rewrite the `#if 0` CCTK_DEBUG block (only on the serialization branch); reword
+1. **The `MB=0` control**, then the full-build re-measurement, then golden — the
+   three items in §STATUS. Nothing else should be quoted until the control is in.
+2. **PR structuring.** Upstream-bound work is `b23fb947`..`defd9f60` plus the
+   `vbar` fix; revert `4f902ca1`, `2fd4595e`, `c96df5d5`. The CarpetX `min_blocks`
+   parameter needs upstreaming first (or in parallel), since the AsterX `MB=2` line
+   cannot build against stock CarpetX. Also rewrite the `#if 0` CCTK_DEBUG NaN-dump
+   on the serialization branch if that branch is ever revived, and reword
    `[golden-master]`/`PROBE` commit messages for upstream.
-7. **Independent of all occupancy work — the `tau` conditioning fix.** The fusion
-   probe was a register null but turned up a real numerical finding: `tau` loses up
-   to ~8 decimal digits to cancellation *in production today* (measured
+3. **Independent of all performance work — the `tau` conditioning fix.** `tau`
+   loses up to ~8 decimal digits to cancellation *in production today* (measured
    `|Q/tau| ~ 5e7`), because `rho*W*(h*W-1)` is a small residual of two large
    like-signed numbers whenever the fluid is cold and slow. A cancellation-free
-   rewrite exists. **This is an accuracy improvement to shipping code with no
-   occupancy claim attached** — see `ideas.md` §"tau conditioning" and
-   `flux-construction.md` §10b. Do not bundle it with performance work.
-
-## Superseded/historical
-
-`Planning/Screenshot*.png` (the "is occ-2 worth it" deliberation) — resolved; occ-2
-was reached, and the real question turned out to be scratch, not reachability.
+   rewrite exists: `flux-construction.md` §10b, `ideas.md` §tau. Not
+   bit-identical, so it needs a conserved-quantity argument rather than golden = 0.
+   **Do not bundle it with performance work.**
+4. Optional, now that the flux kernel is down to a quarter/third of Solve: pick the
+   next target deliberately rather than by momentum. `AnalyticalSpacetimeX_SetMetric`
+   (99 s, ~29 % of Solve in the subcycling run), `Z4c_RHS` (83 s, untouched) and
+   `AsterX_SourceTerms` (57 s on TOV) are all now larger than further flux gains.

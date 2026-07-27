@@ -375,10 +375,13 @@ F(\tilde B^{\mathrm{dir}_k}) = +E_{\mathrm{dir}_j} \tag{10.15}$$
 The vanishing diagonal component is exactly why only two induction-flux grid
 functions per direction exist (`fluxB_j`, `fluxB_k`).
 
-### 10a. Fused form: $H$ and $p_{\rm tot}$ absorb the magnetic sector (optimisation note)
+### 10a. Fused form: $H$ and $p_{\rm tot}$ absorb the magnetic sector
 
-Not implemented. Companion to §11a — the *same* reparametrization, and the two
-share one bit-identity cost, so they should be done together.
+**⚠ NOT IMPLEMENTED, and the register motivation is DEAD — measured as a
+byte-for-byte `-Rpass` null (§11b). Do not retry this shape for occupancy.** Kept
+because the algebra is correct and (a) it explains what `Q` at `fluxes.cxx:700`
+already is, (b) §10b's `tau` fix is derived from it, and (c) §11a's accuracy result
+rides on the same reparametrization.
 
 $Q$ of (10.5) is not an ad-hoc auxiliary: with the total enthalpy
 $H = \rho h + b^2$ of (11.7) and identity (9.5),
@@ -401,30 +404,17 @@ magnetic sector, and their consumers are disjoint: $\lambda_\pm$ needs only
 $v_f^2$ ($H$ having cancelled, §11a), while `mom`/`tau` need only $H$ and
 $p_{\rm tot}$.
 
-**Consequences for the live set.** `B2_rc` (`:650`) currently lives all the way to
-`:716`, and `bsq_rc` (`:659`) to `:703`. In fused form $B^2$ is a transient
-feeding $b^2$, and $b^2$ a transient feeding $(H, p_{\rm tot}, v_f^2)$ — both
-die at the waist. `h_rc`, `cs2_rc` and **both** of `dens_h_W_rc` /
-`dens_h_W_plus_sqrtg_W2b2_rc` disappear as named values ($H$ replaces the pair;
-`tau` no longer needs `dens_h_W` separately). Per side that is
-$\{h, c_s^2, B^2, b^2, \texttt{dens\_h\_W}\}$ removed against $\{H, v_f^2\}$
-added — net $-3$ doubles/side, $-6$ total, on top of §11a's savings.
-
-**The waist.** The dependency chain becomes
+**The waist (structurally real, but not the binding constraint).** The dependency
+chain becomes
 
 $$v_i, W \;\to\; \alpha b^0, B_i, B^2 \;\to\; b^2, b_i \;\to\; \bigl(H, p_{\rm tot}, v_f^2\bigr) \;\to\; \lambda_\pm \;\to\; \text{all seven fluxes}$$
 
-At the fourth arrow `Bs_rc`(3), `Blows_rc`(3), `B2_rc`, `bsq_rc`, `cs2_rc`,
-`h_rc` die together. Downstream of it the minimal per-side core is
-
-$$\{\rho,\,W,\,s,\,Y_e,\,H,\,p_{\rm tot},\,v_f^2,\,\alpha b^0,\,v_i(3),\,b_i(3),\,\tilde v,\,v^{\mathrm{dir}_i},\,B/W\}$$
-
-≈ 15 doubles/side plus shared $\{\sqrt g,\alpha\sqrt g,\alpha,\beta^{\mathrm{dir}_i},u,\lambda^\pm\}$ —
-with $\varepsilon$, $T$, $c_s^2$, $h$, $b^2$, $B^2$, $B^i$, $B_i$, the transverse
-$v^i$/$\tilde v^i$ and all six `g_avg` already dead. **Caveat:** per
-`CHECKPOINT.md` the kernel's peak is *not* this core (VGPR is welded at 256 ≈ 128
-doubles, i.e. the reconstruction stencils dominate), so this waist is a real
-collapse point but not the binding one.
+At the fourth arrow `Bs_rc`(3), `Blows_rc`(3), `B2_rc`, `bsq_rc`, `cs2_rc` and
+`h_rc` all die together, leaving ≈15 doubles/side downstream. The fused form was
+predicted to save ~$-3$ doubles/side here (and more via §11a), and it **saved
+exactly nothing in registers** — the allocator was already rematerializing all of
+it, and per `CHECKPOINT.md` Lesson 4 the binding peak is *reconstruction*-side,
+upstream of this waist. This is the concrete case study for that lesson.
 
 ### 10b. `tau` is catastrophically ill-conditioned, and there is a fix
 
@@ -464,29 +454,27 @@ directly; $z^2/(1+z^2)$; likewise `s_vec`) but is currently a transient inside t
 `switch` and would need plumbing out. Do **not** recover it as $(W^2-1)/W^2$ —
 that is the same cancellation again.
 
-**⚠ Tension with §10a, and a correction to the PROBE.** (10.20) needs $\rho$, $W$,
-$v^2$, $(\rho\varepsilon+p)$, $B^2$, $p_{\rm tot}$ — so it wants $B^2$ *alive* and
-adds $v^2$ and $\rho\varepsilon+p$: about $+3$ doubles/side, cancelling the
-`tau`-side register saving of §10a. Three options, and they must be chosen
-deliberately:
+**Three candidate forms — pick (C).** (10.20) needs $\rho$, $W$, $v^2$,
+$(\rho\varepsilon+p)$, $B^2$, $p_{\rm tot}$, so it wants $B^2$ *alive* and adds two
+per-side values: about $+3$ doubles/side. Since the register effect of anything in
+this region is measured to be nil (§11b), that cost is noise and the choice is purely
+numerical:
 
-| form | conditioning | live cost | bit-identical |
-| --- | --- | --- | --- |
-| (A) current `:715`, eq. (10.18) | loses ≤8 digits | keeps `dens_h_W`, `B2_rc` | yes (baseline) |
-| (B) $Q - \texttt{dens} - \sqrt g(p_{\rm tot} + (\alpha b^0)^2)$ | **worse than (A)** | max removal | no |
-| (C) eq. (10.20) | no catastrophic cancellation | $\approx+3$ doubles/side vs (B) | no |
+| form | conditioning | bit-identical |
+| --- | --- | --- |
+| (A) current `:715`, eq. (10.18) | loses ≤8 digits | yes (baseline) |
+| (B) $Q - \texttt{dens} - \sqrt g(p_{\rm tot} + (\alpha b^0)^2)$ | **worse than (A)** | no |
+| (C) eq. (10.20) | no catastrophic cancellation | no |
 
-(B) is what the PROBE commit implements, and it is a **conditioning regression**
-relative to (A): it forms $HW^2$ — which contains $B^2 + (\alpha b^0)^2$ — and then
+(B) is what the fusion probe implemented, and it is a **conditioning regression**
+relative to (A): it forms $HW^2$ — which contains $B^2 + (\alpha b^0)^2$ — then
 subtracts $(\alpha b^0)^2$ back off numerically, whereas (A) cancels that pair
-*analytically* via (10.18). That extra subtraction can only add error. (B) is
-retained in the PROBE on purpose, as the **upper bound on register removal**, so
-the `-Rpass` number answers "how much is available"; it is not the form to ship.
+*analytically* via (10.18). Do not ship (B).
 
-Note the split of concerns: §11a's $v_f^2$ (eigenvalues) and §10a's $H$ for
-$Q\to\texttt{mom}$ are unaffected by any of this — `mom` is not a small residual,
-so $H$ is safe there. **Only `tau` has the tension.** A shipping change would
-plausibly be $v_f^2$ + $H$-for-`mom` + (C)-for-`tau`.
+Note the split of concerns: §11a's $v_f^2$ (eigenvalues) and $H$ for
+$Q\to\texttt{mom}$ are unaffected — `mom` is not a small residual, so $H$ is safe
+there. **Only `tau` has the tension.** A shipping change would be $v_f^2$ +
+$H$-for-`mom` + (C)-for-`tau`.
 
 **Validation note.** The golden gate is not a one-step check: `magTOV_Z4c_AMR.par:154`
 and `magTOV_Z4c_AMR_SC.par:157` run `cctk_itlast = 100`, so 100 iterations of
@@ -496,16 +484,13 @@ non-zero drift is *acceptable* — for (C) especially, the case to make is on
 conserved quantities (rest mass, constraint norms) over that run, since (C) should
 *improve* them relative to (A).
 
-**Why the hydro/magnetic split is not the way to get here.** Once fused, MHD's
-*incremental* footprint over pure hydro is only $\{\alpha b^0, b_i(3), B/W\}$ = 5
-doubles/side, because $H$ replaces $\rho h$, $p_{\rm tot}$ replaces $p$ and
-$v_f^2$ replaces $c_s^2$ rather than sitting alongside them. A two-kernel
-hydro/magnetic split would spend either re-reconstruction of $B_j,B_k$ plus
-recomputation of $B_i,\alpha b^0,b_i$ (which need `vlows_rc` and $W$ back, so the
-hydro side is re-materialized too) or a ~30-double-per-face global spill — to
-avoid those 5. It trades registers for traffic; the fusion trades registers for
-nothing. **The sector split should be considered closed**; §10a/§11a supersede
-it.
+**A hydro/magnetic kernel split is closed.** Once fused, MHD's *incremental* footprint
+over pure hydro is only $\{\alpha b^0, b_i(3), B/W\}$ = 5 doubles/side, because $H$
+replaces $\rho h$, $p_{\rm tot}$ replaces $p$ and $v_f^2$ replaces $c_s^2$ rather than
+sitting alongside them. A two-kernel split would spend either re-reconstruction of
+$B_j,B_k$ plus recomputation of $B_i,\alpha b^0,b_i$ (which need `vlows_rc` and $W$
+back, re-materializing the hydro side too) or a ~30-double-per-face global spill — to
+avoid those 5.
 
 ## 11. S10 — Characteristic speeds
 
@@ -535,12 +520,12 @@ over $f\in\{0,1\}$, $m\in\{0,\dots,3\}$. These reductions are exactly what the
 old `hlle` / `laxf` / `maxspeeds_from_lambdas` helpers in `fluxes.hxx` /
 `aster_utils.hxx` computed internally, hence bit-identical.
 
-### 11a. The magnetic sector enters through a single scalar (optimisation note)
+### 11a. The magnetic sector enters through a single scalar
 
-Not implemented. Recorded because it is — with §10a, which it must be bundled
-with — **a genuine-REMOVAL candidate**, the category `CHECKPOINT.md` Lesson 1
-says the gfx90a allocator actually banks, and the category Lesson 3 declares
-"exhausted". It is not exhausted; see the sequencing note at the end.
+**Not implemented. The register motivation is dead (§11b) — but the ACCURACY result
+below stands on its own** and is the reason to keep this section: 78× better worst-case
+$\lambda_\pm$, and it makes the `det < 0` clamp provably dead. Ship it only bundled
+with §10b's `tau` fix, which needs the same rebaseline, or not at all.
 
 Define the total enthalpy, the Alfvén fraction and the **fast speed**
 
@@ -570,43 +555,29 @@ and, using $\beta v_f^2 + K(\beta-\alpha v) = \beta\hat a_2 - K\alpha v$,
 
 $$\lambda_\pm = -\beta + \frac{\alpha\Bigl[K v \pm v_f\sqrt{u\,\hat a_2 - K v^2}\Bigr]}{\hat a_2} \tag{11.10}$$
 
-**Why it is worth recording.**
-
-- *Live set.* The call currently passes 3 shared + 6 per-side pairs = 15 doubles
-  (`vel, rho, cs2, w_lor, h, bsq`) and the inlined body materialises
-  `a_m(0..2)`, `a_p(0..2)`, `det_m/det_p` on top. (11.10) needs 3 shared + 3
-  per-side pairs = 9 doubles (`vel`, $v_f^2$, `w_lor`), two temporaries and one
-  `sqrt`. It also makes `cs2_rc` (`fluxes.cxx:673`) dead — the eigenvalue solve
-  is its only consumer — and `h_rc` and `bsq_rc` die too **once §10a is applied
-  with it** (on its own, §11a leaves them alive for `dens_h_W_rc` /
-  `press_plus_pmag_rc`). This is why the two notes must ship as one change.
-- *Conditioning.* In (11.1)–(11.3) every coefficient carries the dimensional
-  factor $H$, and $\Delta = a_1^2 - 4a_2a_0$ is a cancellation-prone difference
-  of large like-signed numbers — hence the `det < 0` clamps at
-  `eigenvalues.hxx:41` and `:64`. In (11.10) the radicand obeys
-  $u\hat a_2 - Kv^2 \ge u v_f^2 + K\bigl(u - v^2\bigr)$, and Cauchy–Schwarz on
-  $v^{\mathrm{dir}_i} = \delta^{\mathrm{dir}_i}_{\;j}v^j$ gives
-  $\bigl(v^{\mathrm{dir}_i}\bigr)^2 \le g^{\mathrm{dir}_i\mathrm{dir}_i}v_jv^j < u$,
-  so it is **strictly positive by construction**: the clamps only ever fire on
-  roundoff, and $v_f^2\in[0,1)$ is structural rather than emergent.
+**Why the conditioning improves.** In (11.1)–(11.3) every coefficient carries the
+dimensional factor $H$, and $\Delta = a_1^2 - 4a_2a_0$ is a cancellation-prone
+difference of large like-signed numbers — hence the `det < 0` clamps at
+`eigenvalues.hxx:41` and `:64`. In (11.10) the radicand obeys
+$u\hat a_2 - Kv^2 \ge u v_f^2 + K(u - v^2)$, and Cauchy–Schwarz on
+$v^{\mathrm{dir}_i} = \delta^{\mathrm{dir}_i}_{\;j}v^j$ gives
+$(v^{\mathrm{dir}_i})^2 \le g^{\mathrm{dir}_i\mathrm{dir}_i}v_jv^j < u$, so it is
+**strictly positive by construction**: the clamps only ever fire on roundoff, and
+$v_f^2\in[0,1)$ is structural rather than emergent.
 
 **Three things this does not license.**
 
-1. **No split of the roots.** $\lambda_\pm$ is an irrational function of $v_f^2$,
-   so there is no exact $\lambda = \lambda_{\rm hydro} + \delta\lambda_{\rm mag}$.
-   (11.7)–(11.10) is a reparametrisation, not a decomposition.
-2. **$b^2=0$ is not a safe cheap bound.** $v_f^2$ is monotonically increasing in
-   $c_A^2$, so dropping $b^2$ *under*estimates the fast speed. That breaks the
-   HLLE requirement that $\lambda^\pm$ bracket every wave — an instability, not
-   merely reduced diffusion. Only over-estimation ($b^2\to$ larger) is safe.
-3. **Not bit-identical.** Factoring out $H$ and collapsing the discriminant
-   changes rounding at every step, and $\lambda$ feeds `charmax`/`charmin`, which
-   multiply *every* flux — a golden compare will drift immediately (the gate
-   demands exactly 0 under `-ffp-contract=off`). Unlike the set-aside
-   "grade the atmosphere once at the face", this is **not** a scheme change: it is
-   an exact algebraic identity, so the physics is untouched and the only question
-   is roundoff — a bounded, measurable quantity, which makes the rebaseline an
-   easier case to argue.
+1. **No split of the roots.** $\lambda_\pm$ is an irrational function of $v_f^2$, so
+   there is no exact $\lambda = \lambda_{\rm hydro} + \delta\lambda_{\rm mag}$. This is
+   a reparametrisation, not a decomposition.
+2. **$b^2=0$ is not a safe cheap bound.** $v_f^2$ increases monotonically in $c_A^2$,
+   so dropping $b^2$ *under*estimates the fast speed, breaking the HLLE requirement
+   that $\lambda^\pm$ bracket every wave — an instability, not merely reduced
+   diffusion. Only over-estimation is safe.
+3. **Not bit-identical**, since $\lambda$ feeds `charmax`/`charmin` which multiply
+   *every* flux. But it is an exact algebraic identity rather than a scheme change, so
+   the physics is untouched and the only question is roundoff — bounded and measurable,
+   which makes the rebaseline an easier case to argue.
 
 **Measured** (`Planning/verify-fusion.cxx`, 4e6 samples spanning
 atmosphere→core including magnetically dominated states, against a long-double
@@ -629,72 +600,31 @@ extra mantissa bits fix — it would not catch a wrong formula), and the fused f
 is closer in 66% of samples, the other 34% being 1–2 ulp coin-flips.
 `tau` is **excluded** from this table — see §10b.
 
-### 11b. Why this survives the serialization seesaw
+### 11b. MEASURED: the fusion is a register NULL. Do not retry this shape.
 
-`CHECKPOINT.md` Lesson 3: Ideas 2/3 reached occ-2 (AGPR 40→0) only by making the
-loop indices runtime variables, which demoted the reconstruction arrays from
-registers to scratch (3448→4984 B/lane) — **relocation, not removal** — giving the
-grid-size-dependent verdict (−4.8% large grid, +8.9% small grid). Lesson 3 then
-names only two routes to occ-2 with low scratch: (a) genuine removal, marked
-*exhausted*, or (b) `launch_bounds`.
-
-§10a + §11a is a third data point on route (a), and it is immune to the seesaw for
-a structural reason: **it introduces no runtime indices.** There is no array to
-dynamically index, hence nothing to demote — the values are *gone from the
-dataflow graph*, not moved off-chip. The fused form is constant-index throughout,
-so it composes with the current unrolled Idea-1 code on `opt/flux-launch-bounds`
-as-is, and it composes *with* route (b): removing data lowers the AGPR floor, and
-also reduces what `launch_bounds` would have to spill selectively. The two levers
-are complementary, not competing.
-
-**Magnitude, honestly.** The gap to close is AGPR 40 → 0 (Lesson 2), i.e. 40
-32-bit registers = 20 doubles. Combined removal: §11a drops the eigenvalue call
-from 3 shared + 6 per-side pairs (`vel, rho, cs2, w_lor, h, bsq`) to 3 + 3
-(`vel`, $v_f^2$, `w_lor`) = $-6$ doubles, and the inlined body's
-`a_m(0..2)`/`a_p(0..2)`/`det_m`/`det_p` (8 doubles of transient) to $K$, $\hat a_2$
-and one radicand per side ($-2$); §10a a further $-6$. Order 12–14 doubles ≈ 24–28
-registers against a 40-register gap. Whether it lands depends on whether *those
-particular* values are what the allocator chose to overflow into AGPR, which is
-not predictable by hand — Lesson 7 records the two prior hand-counts as wrong in
-both directions (predicted 40→16, got 40→1; predicted ~0–6, got occ-2).
-
-### 11c. MEASURED: the fusion is a register NULL. Do not retry this shape.
-
-Implemented on `probe/flux-enthalpy-fusion` (HEAD `659b48b9`) and measured on
-Frontier, 2026-07-25. `-Rpass` for `CalcFluxAll<uct=1,pplim=0,idealgas>`:
+Implemented on `probe/flux-enthalpy-fusion` @ `659b48b9` and measured on Frontier.
+`-Rpass` for `CalcFluxAll<uct=1,pplim=0,idealgas>`:
 
 | | VGPR | AGPR | scratch | occ |
 |---|---:|---:|---:|---:|
 | Idea-1 baseline | 256 | 40 | 3448 | 1 |
 | **+ (H,vf2) fusion** | **256** | **40** | **3448** | **1** |
 
-**Byte-for-byte identical in all four counters** — a true null, not a small move.
-The prediction above (12–14 doubles ≈ 24–28 registers) was wrong, and the reason is
-now `CHECKPOINT.md` **Lesson 8**: *removal only counts if the data is resident in
-the overflow set*. Everything §10a/§11a deletes — `h_rc` (two flops from live
-inputs), `B2_rc`/`bsq_rc` (contractions of live operands), `dens_h_W_rc`, the
-inlined `a_m`/`a_p`/`det` transients — the allocator was **already
-rematerializing**. Only `cs2_rc` was expensive to recompute, and that is 2 doubles.
-A count of names in the source is not a count of values in registers. Compounding
-it: all of this is downstream of reconstruction, and the AGPR overflow set is
-reconstruction-side.
+**Byte-for-byte identical in all four counters.** The hand prediction had been ~12–14
+doubles ≈ 24–28 registers against a 40-register gap: §11a drops the eigenvalue call
+from 15 to 9 doubles plus its `a_m`/`a_p`/`det` transients, §10a a further ~6. All of
+it was worth zero, because the allocator was **already rematerializing** every deleted
+value (`h_rc` is two flops from live inputs; `B2_rc`/`bsq_rc` are contractions of live
+operands; `dens_h_W_rc` is a product) — only `cs2_rc` was expensive, and that is 2
+doubles — and because all of it sits downstream of the reconstruction pressure peak.
+`CHECKPOINT.md` **Lesson 4**; a count of names in the source is not a count of values
+in registers.
 
-**What survives, and it is not the register argument:**
-
-- §11a's accuracy result stands on its own (78× worst-case, 38× mean, clamp
-  provably dead). It is a numerical-quality change costing a golden rebaseline for
-  zero speed — ship it only bundled with something else, or not at all.
-- **§10b's `tau` fix is the real return on this detour** — an accuracy defect in
-  shipping code, no occupancy claim attached.
-- The live occupancy levers moved elsewhere: compiler flags
-  (`compiler-flags.md`, active) and `launch_bounds` (`launch-bounds-plan.md`,
-  fallback). Also from that probe round: the **`vbar` dead-code finding** in
-  `compiler-flags.md` — 12 provably-dead `gf_vels` loads LLVM cannot fold without
-  fast-math. Those are *memory loads that must stay live*, i.e. genuinely in the
-  Lesson-8 category the fusion was not.
-
-Unchanged caveat: expect nothing for `tabulated3d`, EOS-table-bound at AGPR
-~172–244 and unreachable by any flux change.
+**What survives:** §11a's accuracy result (78× worst case, clamp provably dead) and
+**§10b's `tau` fix, the real return on this detour** — an accuracy defect in shipping
+code with no occupancy claim. The occupancy problem was solved elsewhere entirely, by
+scoped `launch_bounds` (`launch-bounds-plan.md`). Also unchanged: expect nothing for
+`tabulated3d`, EOS-table-bound at AGPR ~172–244.
 
 Finally, note that the wave *structure* was already split upstream of this code:
 GR07 Eq. (28) with $b^i=0$ discards the Alfvén and slow-magnetosonic branches
