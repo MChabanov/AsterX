@@ -23,6 +23,13 @@ the record). Current branch/commit map: `CHECKPOINT.md` §Branches.
   builds ~25 min → ~6–7 min.
 - Commits: `bae19fe5`, `bc162f74`, `eadd1fa7`, `f882c088`, `5830bc95`, `bea0b913`,
   `f4a469f7`, `c2614613`.
+- **⭐ This part is ALREADY UPSTREAM.** Merged into `EinsteinToolkit/AsterX` as PR
+  **#146** ("Opt/flux loops: Update CI test suite", merged 2026-07-13) from the
+  `opt/flux-loops` branch; `c2614613` is an ancestor of `etk/dev`, verified. So the
+  golden harness, the TimerReport wiring and the ccache CI do **not** need to be
+  proposed again — but note that the FP-determinism flags (`b9c200ef`) and the
+  regenerated golden `.tsv` (`cc435a06`) came *later*, during Target 1, and are **not**
+  upstream. They ride with the fusion PR.
 
 ## Target 1 — fused single-sweep flux calculation (`opt/flux-loops-impl`, 2026-07-11)
 

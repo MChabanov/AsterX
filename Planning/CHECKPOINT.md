@@ -61,7 +61,34 @@ no `make.code.deps` — the probe machinery is deliberately excluded entirely):
 row not yet gated). `opt/flux-min-blocks` needs CarpetX
 `opt/loop-box-device-min-blocks` @ `19267243` present first.
 
-**⚠ Before upstreaming:** `549a28ca`'s subject still says "PROBE"; reword it.
+**How the two branches differ, and which to use when.** They share the base
+`defd9f60`, both carry the `vbar` fix and `MB=2`, and the difference is **purely
+additive** — 111 insertions, 0 deletions: `opt/flux-launch-bounds` adds 51 lines of
+`#ifdef ASTERX_PROBE_IDEALGAS_ONLY` guard in `fluxes.cxx`, the 60-line
+`make.code.deps`, and the 11 Planning files. The guard is `#ifdef`-inert, so **without
+the `-D` both branches preprocess to the same translation unit**. But
+`opt/flux-launch-bounds` ships a `make.code.deps` that *does* define it, so as checked
+out it builds the reduced 2-instantiation binary that **aborts at runtime** on
+`use_pplim=yes`, hybrid or tabulated.
+
+- **`opt/flux-launch-bounds`** → `-Rpass` sweeps and the timing runs (both are
+  idealgas/`use_pplim=no`, both CT schemes compiled). **Run the owed `MB=0` control
+  here** — flip `MB` back to 0 at the call site, cheap rebuild, same par file.
+- **`opt/flux-min-blocks`** → full 16-instantiation build: the **full-build
+  re-measurement**, the test suite, golden. Same code, without the instantiation cut,
+  which is exactly the confound the control removes.
+
+The two histories are disjoint after `defd9f60` — do not merge or rebase one onto the
+other. Further bit-identical work goes on `opt/flux-registers` and is replayed onto both.
+
+**Stale but still present** (deletable whenever): `opt/flux-loops` — its tip
+`c2614613` is **already upstream**, merged into `EinsteinToolkit/AsterX` as PR #146
+("Opt/flux loops: Update CI test suite", merged 2026-07-13), verified as an ancestor of
+`etk/dev`; and `opt/flux-loops-impl`, an ancestor of `opt/flux-registers`. Both exist
+local and on `origin`. The branch names still appear in these docs as *labels for code
+states* (e.g. the GPU fusion comparison) — that usage stays correct.
+
+`549a28ca`'s subject says "PROBE" — **decided 2026-07-27: leave it as is**, no rebase.
 
 ## Archived branches — retrieve from tags, not from branches
 
@@ -307,20 +334,35 @@ flags. Changing them invalidates golden and the baseline.
 
 1. **The `MB=0` control**, then the full-build re-measurement, then golden — the
    three items in §STATUS. Nothing else should be quoted until the control is in.
-2. **PR structuring.** Upstream-bound work is `b23fb947`..`defd9f60` plus the
-   `vbar` fix; revert `4f902ca1`, `2fd4595e`, `c96df5d5`. The CarpetX `min_blocks`
-   parameter needs upstreaming first (or in parallel), since the AsterX `MB=2` line
-   cannot build against stock CarpetX. Also rewrite the `#if 0` CCTK_DEBUG NaN-dump
-   on the serialization branch if that branch is ever revived, and reword
-   `[golden-master]`/`PROBE` commit messages for upstream.
-3. **Independent of all performance work — the `tau` conditioning fix.** `tau`
+2. **PR structuring — decide the split before opening anything.**
+   `opt/flux-registers` against `etk/dev` is **18 commits, 2038 files, ~51.7k
+   insertions**, because Target 1 (the fusion) was never upstreamed and the bulk of
+   those files are the regenerated golden `.tsv` from `cc435a06`. Only the
+   *infrastructure* went up (PR #146). So this is one very large PR as it stands.
+   Natural seam: **(i)** fusion + FP-determinism flags + golden rebaseline
+   (`9fcb41d6`…`1ce741de`, `b9c200ef`, `cc435a06` — the 2038-file part), then
+   **(ii)** the register work (CT split, eig-collapse, Idea 1, `vbar`), which is a
+   handful of source files. Reviewers can actually read (ii); (i) is mostly
+   regenerated data with a one-paragraph rationale.
+   `549a28ca`'s subject still says "PROBE" — **decided 2026-07-27: leave as is.**
+3. **CarpetX `min_blocks` — routing decided 2026-07-27: propose it to `lwJi/CarpetX`
+   first** (the `liwei` remote), *if* the change is wanted at all; not directly to
+   `EinsteinToolkit/CarpetX`. Note for whoever does it: the branch
+   `opt/loop-box-device-min-blocks` was cut from the local fork's `dev`, which is
+   hundreds of commits ahead of `EinsteinToolkit/CarpetX:main` (fork-only TimerReport
+   and ccache work, plus lwJi's agent_scripts/subcycling commits), and upstream has no
+   `dev` branch. So a PR must be a **cherry-pick of `19267243` alone** onto a branch cut
+   from whichever base the receiving repo wants — it is one self-contained file, so this
+   is trivial. `opt/flux-min-blocks` cannot merge anywhere until that parameter exists in
+   the CarpetX that AsterX CI resolves.
+4. **Independent of all performance work — the `tau` conditioning fix.** `tau`
    loses up to ~8 decimal digits to cancellation *in production today* (measured
    `|Q/tau| ~ 5e7`), because `rho*W*(h*W-1)` is a small residual of two large
    like-signed numbers whenever the fluid is cold and slow. A cancellation-free
    rewrite exists: `flux-construction.md` §10b, `ideas.md` §tau. Not
    bit-identical, so it needs a conserved-quantity argument rather than golden = 0.
    **Do not bundle it with performance work.**
-4. Optional, now that the flux kernel is down to a quarter/third of Solve: pick the
+5. Optional, now that the flux kernel is down to a quarter/third of Solve: pick the
    next target deliberately rather than by momentum. `AnalyticalSpacetimeX_SetMetric`
    (99 s, ~29 % of Solve in the subcycling run), `Z4c_RHS` (83 s, untouched) and
    `AsterX_SourceTerms` (57 s on TOV) are all now larger than further flux gains.
