@@ -70,10 +70,22 @@ still open**, and both closures are measurements, not guesses:
    ⚠ Probe 3 did not actually test the `vbar` finding: folding `0.0 * x` needs
    `nsz` (`-fno-signed-zeros`), which `-ffinite-math-only` does not set. Resolve by
    writing the fix and measuring it, not by another flag build.
-3. **`launch_bounds` plumbing — NOW THE PRIMARY ROUTE** (was the fallback).
-   `launch-bounds-plan.md`, with two corrections recorded there (the ParallelFor
-   replication must call `amrex::detail::call_f_intvect_handler`; and a 7th
-   template argument breaks the CI build against stock CarpetX).
+3. **`launch_bounds` plumbing — ⭐ BUILT AND MEASURED 2026-07-27: occ-2 REACHED
+   AT LOW SCRATCH.** `launch-bounds-plan.md` §TRIAL RESULT owns the numbers.
+   Production `uct1` went **256/32/3448/occ-1 → 128/128/3608/occ-2** with both
+   spill counters still 0, and **all 9 EMF kernels byte-for-byte unchanged** (they
+   keep `MB=0` and the ordinary `ParallelFor` path). Scratch cost +160 B/lane
+   against the serialization's +1536 for the same occupancy — the Lesson-3(b)
+   hypothesis, confirmed. Implementation: CarpetX branch
+   `opt/loop-box-device-min-blocks` @ `19267243` (pushed, `MChabanov/CarpetX`),
+   AsterX side `c96df5d5` (**breaks CI by design**, needs the forked CarpetX).
+   The two plan corrections held (the replication calls
+   `amrex::detail::call_f_intvect_handler`; the 7th template argument does break
+   stock-CarpetX builds).
+   **Open: TIMING at both grid sizes — the only remaining question.** Note the
+   likely sign flip vs the serialization: TOV-large is flux-CT (`uct0`, which the
+   reduced build says was already occ-2, so possibly nothing to gain and +48
+   B/lane to lose), while UCT-small is the kernel that actually gained a wave.
 
 Two by-products worth more than the occupancy hunt so far, both in
 `flux-construction.md`: **`tau` loses up to ~8 digits to cancellation in
@@ -138,9 +150,15 @@ compilation, comparable only within this block):
 | `--enable-deferred-spilling` | 256 | 30 | 3448 | 1 |
 | `-ffinite-math-only` | 256 | 34 | 3448 | 1 |
 | **`vbar` fix (12 dead loads removed)** | **256** | **32** | **3448** | **1** |
+| **`launch_bounds(256,2)` — MB=2** | **128** | **128** | **3608** | **2** ⭐ |
 
-Four independent attempts, three compiler-side and one source-side, all within
-±2 of a 32-register gap. The `vbar` row is the baseline row byte for byte.
+Four independent attempts to *coax* the allocator — three compiler-side, one
+source-side — all landed within ±2 of a 32-register gap. **Constraining it
+instead worked on the first try**: total pressure 288 → 256 (exactly the occ-2
+budget), occ 1 → 2, and scratch up only 160 B/lane versus the serialization's
++1536. The 128/128 split with both spill counters at 0 means the allocator used
+AGPRs as *on-chip* spill space rather than scratch memory — the best available
+outcome. Detail and caveats: `launch-bounds-plan.md` §TRIAL RESULT.
 
 The fusion row is the Idea-1 row **byte for byte** — a true null, not a small
 move (2026-07-25, `probe/flux-enthalpy-fusion`). Staleness ruled out: `-Rpass`
@@ -353,7 +371,18 @@ them invalidates golden + baseline.
    reduced build never instantiates the `pplim=true` branch, which is where
    bit-identity has to hold exactly) and a golden gate, expected exactly 0. Do not
    spend a dedicated timing run on it — fold it into the next one.
-3. **THEN — the `launch_bounds` plumbing, now the primary route**
+3. **DONE — the `launch_bounds` plumbing: BUILT, occ-2 AT LOW SCRATCH** (see the
+   STATUS section and `launch-bounds-plan.md` §TRIAL RESULT).
+   **NEXT ACTION IS TIMING**, at both grid sizes, vs the Idea-1 baseline, recorded
+   in `baseline-timings.md`. Reference points: forced occ-2 via a *global*
+   `__launch_bounds__` measured −15.9% on TOV (with Z4c collateral this scoped
+   version avoids); occ-2 via serialization only −4.8% because of scratch. This
+   sits at 3608 B/lane, near the low-scratch end. Also owed: a **full-build**
+   re-measurement (record `uct0`'s full-build baseline too — it was never taken),
+   then the golden gate, which is expected at exactly 0 since `launch_bounds` is a
+   codegen directive.
+   Historical plan detail below:
+   **THE ORIGINAL PLAN — the `launch_bounds` plumbing, now the primary route**
    (`launch-bounds-plan.md` Changes 1+2) — add a `min_blocks` template param to
    CarpetX `loop_box_device` in the user's fork at `../CarpetX`, routing to AMReX's
    existing 3-arg `launch_global<NT,MB>`. Two corrections recorded in that doc: the

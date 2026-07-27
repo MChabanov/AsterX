@@ -129,6 +129,68 @@ temporarily set `MB` back to 0 at the call site — that must reproduce
 256/32/3448/occ-1 exactly, which isolates "the replication is wrong" from
 "forcing occ-2 does not help".
 
+## ⭐ TRIAL RESULT (2026-07-27) — occ-2 REACHED AT LOW SCRATCH. Criterion MET.
+
+First compile of the plumbing, reduced build (`-DASTERX_PROBE_IDEALGAS_ONLY`),
+`MB=2` at the flux site. **It built, and it did what the hypothesis said it would.**
+
+| kernel | SGPR | VGPR | AGPR | VGPR+AGPR | scratch | spill v/s | occ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| FLUX uct1 pp0 idealgas | 100 | **128** | **128** | **256** | **3608** | 0/0 | **2** |
+| FLUX uct0 pp0 idealgas | 100 | 128 | 128 | 256 | 3496 | 0/0 | **2** |
+| EMF CalcE uct1 (×3) | 106 | 77 | 1 | 78 | 72 | 0/20,22,24 | 5 |
+| EMF CalcE uct0 (×3) | 36 | 16–19 | 0 | — | 0 | 0/0 | 8 |
+| EMF CalcFstag (×3) | 72 | 52–56 | 0 | — | 0 | 0/0 | 8 |
+| EMF CalcAux (×2) | 58, 92 | 15, 38 | 0 | — | 0 | 0/0 | 8 |
+
+Against the reduced baseline (`uct1` = 100/256/32/3448/occ-1):
+
+- **occ 1 → 2.** The target is met.
+- **scratch 3448 → 3608, i.e. +160 B/lane.** The serialization's route to the same
+  occupancy cost **+1536** (4984). So this reaches occ-2 for **~10% of the scratch
+  the rolled loops cost**. That was the entire bet in Lesson 3(b), and it paid.
+- **Total register pressure 288 → 256**, exactly the occ-2 budget (512/2). The
+  allocator found the 32 registers that three compiler flags could not, because
+  it was *told* to rather than asked.
+- **The split is the interesting part: VGPR 256→128, AGPR 32→128, both spill
+  counters still 0.** The allocator did not spill to memory; it used the AGPR half
+  of the unified gfx90a register file as **on-chip** spill space. That is the best
+  available outcome — `v_accvgpr_read/write` is register-speed, unlike
+  `scratch_load/store`. It also retires the old framing of AGPR as "the overflow
+  set to be drained to zero" (Lesson 2's gauge): at occ-2 the budget is 256 total
+  and an even 128/128 split is a *healthy* allocation, not overflow.
+- **Zero collateral: all 9 EMF kernels are byte-for-byte unchanged.** Their
+  mangled names carry `Li0E` for MB and still route through
+  `launch_global<256>` (the 2-arg overload, line 21) via `ParallelFor`, while the
+  two flux kernels now use `launch_global<256, 2>` (the 3-arg overload, line 25).
+  This is the structural advantage over a TU-scoped `-mllvm` flag, demonstrated
+  rather than argued: probe 2 damaged `CalcE`, this does not touch it.
+
+**Two caveats before this is called a win.**
+
+1. **This is a reduced build.** The full build is a different compilation (AGPR 40
+   vs 32 with no flags). `launch_bounds` forces the budget either way so occ-2
+   should hold, but the scratch number may differ — re-measure.
+2. **`uct0` was ALREADY occ-2 in the reduced build** (252/2/3448) and is now
+   128/128/3496. Same occupancy, +48 B/lane scratch, more AGPR traffic — so for
+   flux-CT this change is plausibly **neutral-to-slightly-negative**. That matters
+   for how the timing runs will read: **the large-grid TOV run is flux-CT
+   (`use_uct=no`)**, i.e. the kernel that may have had nothing to gain, while the
+   *small*-grid subcycling run is UCT, the kernel that just gained a wave. Expect
+   the sign of the effect to be the OPPOSITE of the serialization's (which won on
+   TOV-large and lost on UCT-small). Do not read a flat TOV result as failure.
+   ⚠ `uct0`'s full-build baseline was never recorded — only `uct1`'s
+   (256/40/3448/occ-1). Get it while re-measuring, or this comparison stays
+   guesswork.
+
+**Next: timing, which is now the only open question.** Both grid sizes, against
+the Idea-1 baseline, per `baseline-timings.md`. Reference points: forced occ-2 via
+a global `__launch_bounds__` measured **−15.9%** on the TOV run (with Z4c
+collateral, which this scoped version avoids); genuine occ-2 via serialization
+managed only −4.8% because of the scratch. This sits at 3608 B/lane, much nearer
+the low-scratch end, so the honest expectation is somewhere between −5% and −16%
+on whichever kernel actually gained.
+
 ## Goal
 
 Force the fused flux kernel to occ-2 on the **unrolled, constant-index, low-scratch**
