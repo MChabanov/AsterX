@@ -93,6 +93,40 @@ fusion's `tau` form** (`Q - dens - sqrtg*(p_tot + alp_b0^2)`): via
 contains it, a pair the current code cancels analytically — a conditioning
 *regression*. Ship `vf2` + the `tau` form above, and leave `H` out of `tau`.
 
+### The accuracy PR — everything needed, so nothing has to be re-derived
+
+**No work started; this is the complete shopping list.** Deliberately kept separate
+from the performance PRs, because neither piece is bit-identical and both need the
+same rebaseline — so they should share exactly one.
+
+**Code already written and archived:** tag **`archive/vf2-accuracy-probe`** →
+`659b48b9` (content-identical to `origin/probe/flux-enthalpy-fusion` @ `ad9b9bd6`).
+Its `AsterX/src/eigenvalues.hxx` is a complete, documented `vf2` implementation:
+derivation in comments, return type collapsed `vec<vec<REAL,4>,2>` → `vec<vec<REAL,2>,2>`,
+clamp demoted to roundoff insurance. **Take that file. Do NOT take that branch's
+`fluxes.cxx`** — its `tau` is form (B), the conditioning regression.
+
+**Still to write:** the `tau` form (C) above, which needs `v^2` plumbed out of the §8
+reconstruction `switch` (cancellation-free there) and `rho*eps + p` built directly.
+Both traps are described above; both are easy to get wrong.
+
+**Validation plan** (this is the part that makes or breaks the PR — a golden delta
+alone proves nothing):
+1. Golden will **not** be 0. Expect it to move; the case is that it moves *toward*
+   truth. For `vf2` that is already quantified against a long-double reference.
+2. The real argument is **conserved quantities** over the existing 100-iteration
+   magnetized TOV + Z4c + AMR gate (`magTOV_Z4c_AMR.par:154`,
+   `magTOV_Z4c_AMR_SC.par:157`): compare rest-mass conservation and constraint norms,
+   and show the new forms **improve** them.
+3. Rebaseline the golden `.tsv` only after (2) is convincing, and note in the PR that
+   the gate exercises accumulated drift, not just one step.
+4. Harness for the accuracy numbers is already committed: `Planning/verify-fusion.cxx`
+   (4e6-sample sweep vs a long-double reference).
+
+**Expect no register or timing effect** in either direction — everything here sits
+downstream of the reconstruction pressure peak (`CHECKPOINT.md` Lesson 4), so judge it
+purely on numerics and do not let a `-Rpass` reading influence the decision.
+
 ## Retire flux grid functions — blocked as a wholesale change
 
 The flux GFs are a multi-consumer interface: (1) `AsterX_RestrictFluxes` needs them as

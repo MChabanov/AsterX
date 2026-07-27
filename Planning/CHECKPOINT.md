@@ -47,7 +47,28 @@ any further flux work.
    the probe commits reverted or the CarpetX branch upstreamed — golden CI builds
    against stock CarpetX.
 
-## Branches
+## Branches — PR-BOUND STACK (built 2026-07-27)
+
+Two clean branches, both containing **AsterX files only** (verified: no `Planning/`,
+no `make.code.deps` — the probe machinery is deliberately excluded entirely):
+
+| branch | tip | contents |
+|---|---|---|
+| **`opt/flux-registers`** | `1ed53981` | the bit-identical stack: `b23fb947` → `e8b0718c` → `4a7e40ec` (CT-scheme split: compute / hoist / storage) → `549a28ca` (eigenvalue collapse) → `defd9f60` (Idea 1, `use_pplim` compiled out) → `1ed53981` (`vbar` fix). **Fast-forwarded from `4a7e40ec` to `defd9f60` on 2026-07-27** — it previously held only the CT-scheme split, i.e. it was two commits short of the state every timing number was measured against. |
+| **`opt/flux-min-blocks`** | `cd6b3b7a` | `opt/flux-registers` + `MB=2` at the flux site. ⚠ **Requires the CarpetX branch**; cannot build against stock CarpetX. |
+
+`opt/flux-registers` should pass golden at exactly 0 end to end (`1ed53981` is the only
+row not yet gated). `opt/flux-min-blocks` needs CarpetX
+`opt/loop-box-device-min-blocks` @ `19267243` present first.
+
+**⚠ Before upstreaming:** `549a28ca`'s subject still says "PROBE"; reword it.
+
+**Archived, not deleted:** tag **`archive/vf2-accuracy-probe`** → `659b48b9`
+(content-identical to `origin/probe/flux-enthalpy-fusion` @ `ad9b9bd6`; same tree,
+amended hash). Holds the `vf2` eigenvalue implementation for the future accuracy PR —
+see §Accuracy PR below. The tag message records what to take and what not to.
+
+## Working branch (probe machinery + these docs)
 
 **AsterX** (`origin` = MChabanov/AsterX), branch **`opt/flux-launch-bounds`**:
 
@@ -61,7 +82,12 @@ any further flux work.
 | `c96df5d5` | ⚠ `MB=2` at the flux site — **breaks CI by design**, needs the forked CarpetX |
 | + `vbar` fix | `if constexpr (pplim)` around the UCT drift blend; register-null but keep (12 dead loads) |
 
-Revert the three ⚠ commits before any golden or test-suite run.
+This branch is the **working/measurement** branch: it keeps the probe guard, the
+`make.code.deps` with `-Rpass`, and these Planning docs. **None of that is upstream
+bound** — the PR-bound content was extracted to the two branches above by path
+(`AsterX/src/fluxes.cxx` hunks only), not by cherry-picking commits, because
+`3a6039c8`/`86bb2c48` mix the `vbar` fix with `make.code.deps` and doc edits.
+**These docs are deliberately kept local and are not committed onto the PR branches.**
 
 **CarpetX** (`origin` = MChabanov/CarpetX): **`opt/loop-box-device-min-blocks`** @
 `19267243`, off `dev` @ `55e7434e`, pushed. One file, `Loop/src/loop_device.hxx`.
