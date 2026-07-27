@@ -5,7 +5,7 @@ Design note for the flux-by-flux (Idea 2) and face-state (Idea 3) serialization 
 the production ideal-gas kernel — but at +1536 B/lane of scratch, which cost most of the
 benefit (−4.8 % on TOV-large, **+8.9 %** on UCT-small). **Scoped `launch_bounds` later
 obtained the same occupancy at +160 B/lane and −27 %**, so this shape is superseded;
-branch `opt/flux-eig-collapse` @ `210a013c` is kept as the record. Retained here: the
+tag `archive/serialization-occ2` @ `210a013c` is kept as the record. Retained here: the
 structure, the bit-identity argument, and one open cleanup item.
 
 ## What was built

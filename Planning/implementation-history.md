@@ -91,7 +91,7 @@ refactor is unattainable.
 CPU verdict: cost-neutral by design; GPU verdict: **−27 %**. Both in
 `baseline-timings.md`.
 
-## Register reduction to occ-2 (branch `opt/flux-eig-collapse`, 2026-07-23/24)
+## Register reduction to occ-2 (tag `archive/serialization-occ2`, 2026-07-23/24)
 
 Goal: drain the ideal-gas AGPR overflow to reach occ-2. All bit-identical (golden PASS
 at 0, cpu/rocm/cuda). `-Rpass` tables: `profiling-flux-kernel.md`.
@@ -128,7 +128,7 @@ at 0, cpu/rocm/cuda). `-Rpass` tables: `profiling-flux-kernel.md`.
 Not shipped; recorded so the shapes are not retried. Reasons: `CHECKPOINT.md`
 Lessons 4 and 5.
 
-- **`probe/flux-enthalpy-fusion` @ `659b48b9`** — the `(H,vf2)` algebraic fusion
+- **tag `archive/vf2-accuracy-probe` @ `659b48b9`** — the `(H,vf2)` algebraic fusion
   (`flux-construction.md` §10a/§11a): total enthalpy and fast speed absorb the whole
   magnetic sector, deleting `cs2_rc`/`h_rc`/`dens_h_W_rc`/`dens_h_W_plus_…` and
   demoting `B2_rc`/`bsq_rc` to transients, eigenvalue signature 15→9 doubles.

@@ -63,10 +63,25 @@ row not yet gated). `opt/flux-min-blocks` needs CarpetX
 
 **⚠ Before upstreaming:** `549a28ca`'s subject still says "PROBE"; reword it.
 
-**Archived, not deleted:** tag **`archive/vf2-accuracy-probe`** → `659b48b9`
-(content-identical to `origin/probe/flux-enthalpy-fusion` @ `ad9b9bd6`; same tree,
-amended hash). Holds the `vf2` eigenvalue implementation for the future accuracy PR —
-see §Accuracy PR below. The tag message records what to take and what not to.
+## Archived branches — retrieve from tags, not from branches
+
+Both dead-end branches were **deleted and replaced by annotated tags**, local and on
+`origin`. Their commits are unreachable from any branch, so **`git fetch --tags` is
+required** — plain `git fetch` only follows tags that point into branch history.
+
+| tag | commit | what it holds |
+|---|---|---|
+| **`archive/vf2-accuracy-probe`** | `659b48b9` | the `(H,vf2)` fusion probe (was `probe/flux-enthalpy-fusion`; the remote tip `ad9b9bd6` had an identical tree). **`eigenvalues.hxx` here is the asset for the accuracy PR** — see §Accuracy PR in `ideas.md`. Register motivation dead; its `tau` is form (B), a regression — don't take it. |
+| **`archive/serialization-occ2`** | `210a013c` | Ideas 2+3, the rolled-loop serialization (was `opt/flux-eig-collapse`). The only source-only occ-2, golden PASS at 0, but scratch 4984 → −4.8 % / +8.9 %. Kept as the counterfactual the `launch_bounds` result is measured against, plus `eigenvalues_oneside` and the rolled-loop bit-identity argument. |
+
+Each tag message records what to take and what to avoid. To restore either as a
+working branch:
+
+```bash
+git fetch --tags origin
+git branch <name> archive/serialization-occ2     # or: git checkout -b <name> <tag>
+git show archive/vf2-accuracy-probe:AsterX/src/eigenvalues.hxx   # single file, no checkout
+```
 
 ## Working branch (probe machinery + these docs)
 
@@ -92,12 +107,12 @@ bound** — the PR-bound content was extracted to the two branches above by path
 **CarpetX** (`origin` = MChabanov/CarpetX): **`opt/loop-box-device-min-blocks`** @
 `19267243`, off `dev` @ `55e7434e`, pushed. One file, `Loop/src/loop_device.hxx`.
 
-**Other AsterX branches, kept as records:** `opt/flux-eig-collapse` @ `210a013c`
-(the serialization stack, Ideas 1/2/3 — occ-2 via rolled loops, golden PASS at 0,
-but scratch 4984; `eigenvalues_oneside` exists only here);
-`probe/flux-enthalpy-fusion` @ `659b48b9` (the `(H,vf2)` algebraic fusion, a
-byte-for-byte `-Rpass` null — do not retry, see Lesson 4). **Idea 4** (hoist eig+UCT
-ahead of the assembly) was golden-PASS but occupancy-null and is REVERTED.
+**Dead-end branches are gone — see §Archived branches above** for the two tags that
+replaced them (`archive/serialization-occ2`, `archive/vf2-accuracy-probe`). Also
+deleted: `backup/flux-registers-prelinear`, a pre-rebase copy whose three commits were
+tree-identical to `b23fb947`/`e8b0718c`/`4a7e40ec`, so nothing was archived from it.
+**Idea 4** (hoist eig+UCT ahead of the assembly) was golden-PASS but occupancy-null
+and was REVERTED — it exists only in this history, not as a branch.
 
 ## The `-Rpass` progression (production `CalcFluxAll<uct=1,pplim=0,idealgas>`)
 

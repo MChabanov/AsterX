@@ -602,7 +602,8 @@ is closer in 66% of samples, the other 34% being 1–2 ulp coin-flips.
 
 ### 11b. MEASURED: the fusion is a register NULL. Do not retry this shape.
 
-Implemented on `probe/flux-enthalpy-fusion` @ `659b48b9` and measured on Frontier.
+Implemented on tag `archive/vf2-accuracy-probe` @ `659b48b9` (branch deleted) and
+measured on Frontier.
 `-Rpass` for `CalcFluxAll<uct=1,pplim=0,idealgas>`:
 
 | | VGPR | AGPR | scratch | occ |

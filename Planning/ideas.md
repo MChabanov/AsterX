@@ -100,7 +100,8 @@ from the performance PRs, because neither piece is bit-identical and both need t
 same rebaseline — so they should share exactly one.
 
 **Code already written and archived:** tag **`archive/vf2-accuracy-probe`** →
-`659b48b9` (content-identical to `origin/probe/flux-enthalpy-fusion` @ `ad9b9bd6`).
+`659b48b9`. The branch it came from is deleted; `git fetch --tags` then
+`git show archive/vf2-accuracy-probe:AsterX/src/eigenvalues.hxx` gets the file.
 Its `AsterX/src/eigenvalues.hxx` is a complete, documented `vf2` implementation:
 derivation in comments, return type collapsed `vec<vec<REAL,4>,2>` → `vec<vec<REAL,2>,2>`,
 clamp demoted to roundoff insurance. **Take that file. Do NOT take that branch's
