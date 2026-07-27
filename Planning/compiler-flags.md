@@ -209,10 +209,30 @@ as long as the two are never conflated.
 
 ## The `vbar` finding — a real removal, independent of all flags
 
-**STATUS: IMPLEMENTED in `fluxes.cxx` 2026-07-27 (uncommitted at time of writing);
-`-Rpass` and golden not yet run.** This survives the closure of the flag route —
-it is a source change, and the flag sweep never validly tested it (probe 3 needed
-`-fno-signed-zeros`, see above). Measure it directly.
+**STATUS: IMPLEMENTED in `fluxes.cxx` 2026-07-27 — and MEASURED as a register
+NULL the same day.** Reduced build with the fix in place:
+
+| kernel | SGPR | VGPR | AGPR | scratch | spill v/s | occ | vs baseline |
+|---|---:|---:|---:|---:|---:|---:|---|
+| FLUX uct1 pp0 idealgas | 100 | 256 | 32 | 3448 | 0/0 | 1 | **identical** |
+| FLUX uct0 pp0 idealgas | 100 | 252 | 2 | 3448 | 0/0 | 2 | identical |
+| all 9 EMF kernels | — | — | — | — | — | — | identical |
+
+Deleting 12 provably-dead global loads moved **not one counter**. The prediction
+below — "these are memory loads that must stay live, exactly the category Lesson 8
+says the allocator banks" — was **wrong**, and the reason is worth more than the
+change was: see `CHECKPOINT.md` **Lesson 9**. Short version: AGPR count is set by
+*peak simultaneous liveness*, and the UCT epilogue sits after the reconstruction
+peak, so nothing removed there can lower the peak — the load-vs-arithmetic
+distinction is irrelevant, only position relative to the peak matters.
+
+**Keep the change anyway, with the claim restated.** It is bit-identical, it
+deletes 12 real global loads from the production kernel (memory traffic, which
+`-Rpass` does not measure at all), and it removes a multiply-by-zero that only
+looked meaningful. Ship it as part of the PR with **no occupancy claim**, gate it
+with golden (expect exactly 0), and do not spend a dedicated timing run on it —
+12 loads in a kernel this size will sit under the noise. Fold it into whatever
+timing run happens next.
 
 Found by comparing `uct1` (288 registers) against `uct0` (254): **UCT is the
 expensive config by ~34 registers**, which was not previously documented.

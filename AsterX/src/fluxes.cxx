@@ -1265,9 +1265,17 @@ constexpr int dir_k = (dir_i == 0) ? 2 : ((dir_i == 1) ? 0 : 1);
     // 0.0 * x away: that needs both nnan (x could be Inf, and Inf * 0 -> NaN)
     // and nsz (0.0 * x is -0.0 for x < 0, so the product is not a compile-time
     // constant) -- i.e. fast-math, which this project deliberately does not
-    // enable. So without this branch the 4 gf_vels loads per direction are
-    // required to stay live across the UCT epilogue in a configuration that
-    // provably cannot use them: 12 dead loads in the production kernel.
+    // enable. So without this branch the compiler must emit 4 gf_vels loads per
+    // direction in a configuration that provably cannot use them: 12 dead loads
+    // in the production kernel.
+    //
+    // What this buys, measured (gfx90a, -Rpass, 2026-07-27): 12 fewer global
+    // loads, and *no* change in register pressure or occupancy (256 VGPR /
+    // 32 AGPR / occ 1, byte-for-byte). The register count is set by peak
+    // simultaneous liveness, which lives in reconstruction; this block runs
+    // after flux assembly, i.e. past the peak. Do not expect occupancy from
+    // deletions down here -- see Planning/CHECKPOINT.md Lesson 9.
+    //
     // Bit-identical for pplim=yes (same expression) and exactly equal for
     // pplim=no on finite data (1.0*x == x, x + 0.0 == x; the sole exception is
     // x == -0.0, which becomes +0.0, invisible to a norm-based compare).

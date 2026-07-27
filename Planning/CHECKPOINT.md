@@ -17,7 +17,7 @@ from bit-identity-gated refactors (golden-master = exactly 0) and now
 register/occupancy work measured on Frontier/MI250X. CI CPU is cost-neutral by
 design; the payoff is GPU.
 
-## STATUS: occ-2 is reachable but carries a scratch tradeoff — two routes, decision pending
+## STATUS: occ-2 is reachable but carries a scratch tradeoff — one route left (`launch_bounds`)
 
 The production ideal-gas flux kernel was occupancy-bound at **occ-1**. A
 source-only serialization stack (Ideas 1/2/3) reached **occ-2**, but the way it
@@ -35,15 +35,20 @@ where the extra scratch bandwidth dominates (small grid). And the *genuine* occ-
 test on the same TOV run) — that gap is the scratch. **=> the lever is to reach
 occ-2 WITHOUT the serialization scratch.**
 
-### Where that stands as of 2026-07-25
+### Where that stands as of 2026-07-27 — two of three routes are now closed
 
-Three routes to occ-2-at-low-scratch, in the order they were tried:
+Three routes to occ-2-at-low-scratch, in the order they were tried. **Only #3 is
+still open**, and both closures are measurements, not guesses:
 
-1. **Source removal — CLOSED on measurement.** The `(H,vf2)` algebraic fusion
-   (`flux-construction.md` §10a/§11a) was a byte-for-byte `-Rpass` null. Reason in
-   Lesson 8: it deleted values the allocator was already rematerializing, and
-   nothing downstream of the flux-assembly waist is in the AGPR overflow set.
-   Branch `probe/flux-enthalpy-fusion` kept as the record.
+1. **Source removal — CLOSED on measurement, twice.** (a) The `(H,vf2)` algebraic
+   fusion (`flux-construction.md` §10a/§11a) was a byte-for-byte `-Rpass` null —
+   Lesson 8: it deleted values the allocator was already rematerializing. Branch
+   `probe/flux-enthalpy-fusion` kept as the record. (b) The `vbar` fix
+   (2026-07-27) removed 12 provably-dead *memory loads*, the category Lesson 8
+   said the allocator banks, and was **also byte-for-byte null** — Lesson 9: the
+   register count is peak simultaneous liveness, and the UCT epilogue is past the
+   peak, so position beats category. **No removal candidates remain**: everything
+   at the peak is reconstruction-side, which is separately blocked.
 2. **Compiler flags — CLOSED on measurement, 2026-07-27.** Own doc:
    **`compiler-flags.md`** (§SWEEP RESULTS + §VERDICT). All three mechanisms run
    against the target `uct1` (needs AGPR 32→0):
@@ -123,6 +128,20 @@ assembly) was tried, golden-PASS but occupancy-null (pure reorder), and REVERTED
 | Idea 3 (face `for(f)`) | 253 | 0 | 4984 | 2 |
 | **(H,vf2) fusion, off Idea 1** | **256** | **40** | **3448** | **1** |
 
+Reduced build (`-DASTERX_PROBE_IDEALGAS_ONLY`, AGPR 32 not 40 — a *different*
+compilation, comparable only within this block):
+
+| stage | VGPR | AGPR | scratch B/lane | occ |
+|---|---:|---:|---:|---:|
+| Idea-1 baseline | 256 | 32 | 3448 | 1 |
+| `--misched=gcn-max-occupancy` | 256 | 32 | 3448 | 1 |
+| `--enable-deferred-spilling` | 256 | 30 | 3448 | 1 |
+| `-ffinite-math-only` | 256 | 34 | 3448 | 1 |
+| **`vbar` fix (12 dead loads removed)** | **256** | **32** | **3448** | **1** |
+
+Four independent attempts, three compiler-side and one source-side, all within
+±2 of a 32-register gap. The `vbar` row is the baseline row byte for byte.
+
 The fusion row is the Idea-1 row **byte for byte** — a true null, not a small
 move (2026-07-25, `probe/flux-enthalpy-fusion`). Staleness ruled out: `-Rpass`
 remarks are emitted at compile time, so getting output at all proves
@@ -201,7 +220,12 @@ EOS-table-bound — occ-2 unreachable there by any flux change). hybrid 54/0/occ
    `registers/thread` + spill bytes via `--resource-usage`. Detail: `GPUHardwareDict.md`.
 7. **My hand double-counts were unreliable** (predicted Idea-2 40→16, got 40→1;
    predicted Idea-3 net ~0-6, got occ-2). Trust `-Rpass` + timing, not arithmetic.
-8. **⚠ REMOVAL ONLY COUNTS IF THE DATA IS RESIDENT IN THE OVERFLOW SET.** Sharpens
+8. **⚠ REMOVAL ONLY COUNTS IF THE DATA IS RESIDENT IN THE OVERFLOW SET.**
+   **⚠ SUPERSEDED IN PART BY LESSON 9 — read that first.** This lesson's
+   load-vs-rematerializable-arithmetic distinction turned out not to be the
+   operative one; *position relative to the pressure peak* is. Lesson 8's
+   conclusions about the fusion remain correct, but its prediction that removing
+   non-rematerializable memory loads would work was tested and failed. Sharpens
    Lesson 1, learned the expensive way from the null in the `-Rpass` table above.
    What the allocator banks is removal of **long-lived values that are expensive to
    REMATERIALIZE**. Removing a source-level value that is short-lived, or cheaply
@@ -234,6 +258,39 @@ EOS-table-bound — occ-2 unreachable there by any flux change). hybrid 54/0/occ
    either, dump the ISA and look: `v_accvgpr_read/write_b32` shows what is truly
    AGPR-resident, `scratch_load/store` shows what is in private memory. Stop
    inferring from counters — that is what produced the two wrong predictions.
+
+9. **⚠ REGISTERS ARE SET BY PEAK SIMULTANEOUS LIVENESS — POSITION BEATS
+   CATEGORY.** The final sharpening of Lessons 1/8, measured 2026-07-27 by the
+   `vbar` fix. That change deleted **12 provably-dead global loads** from the
+   production kernel (`if constexpr (pplim)` around the UCT drift blend, so the
+   cell-centred fallback is compiled out instead of multiplied by zero) and the
+   `-Rpass` result was **byte-for-byte identical in all 11 kernels** —
+   256/32/3448/occ-1 unchanged.
+   Lesson 8 predicted this would work: unlike the `(H,vf2)` fusion's
+   rematerializable algebra, these were *memory loads that cannot be
+   rematerialized*, "exactly the category the allocator banks". **That prediction
+   was wrong, and the load-vs-arithmetic distinction is not the operative one.**
+   AGPR count = the maximum number of values live *at one point*. The pressure
+   peak is the reconstruction state (S2–S6). The UCT epilogue runs *after* flux
+   assembly, i.e. after the peak, so values born and consumed there occupy
+   registers that are already free — removing them lowers total work, never the
+   peak, and therefore never the register count.
+   **Operational rule: before proposing any removal, ask WHERE it lives relative
+   to the reconstruction peak, not what kind of value it is.** Everything
+   downstream of the flux-assembly waist — algebra (Lesson 8) *and* memory loads
+   (this lesson) — is register-null. That is now measured twice from two
+   different directions.
+   **Consequence: route (a) of Lesson 3, "genuine removal", is CLOSED with no
+   candidates remaining.** The `vbar` fix was the last one. Every removable thing
+   at the peak is reconstruction-side, and that path is separately blocked
+   (both-sides `reconstruct()`, `useLO` OR-over-both-sides, ReconX risk — see
+   "Ideas considered and set aside"). Combined with the compiler-flag route
+   closing the same day, **`launch_bounds` is the only remaining occupancy lever.**
+   Corollary for the *scratch* problem (the small-grid regression, a separate
+   criterion per the Lesson-3 correction): reconstruction-side data removal would
+   cut the 3448 B/lane of `alloca`, and that is a different change from anything
+   tried so far. Dump the ISA before guessing — `v_accvgpr_read/write_b32` shows
+   what is truly AGPR-resident, `scratch_load/store` what is in private memory.
 
 ## Ideas considered and set aside (do not re-derive from scratch)
 
@@ -284,15 +341,18 @@ them invalidates golden + baseline.
    which are still what you need to measure anything else. Reduced-build
    baseline: `uct1` 256/32/3448/occ-1, needing AGPR → 0; `uct0` 252/2/3448/occ-2
    is the canary.
-2. **IN PROGRESS — the `vbar` fix. Written 2026-07-27, not yet measured.**
+2. **DONE — the `vbar` fix: written and measured 2026-07-27. Register NULL.**
    `if constexpr (pplim)` around the UCT drift-velocity blend in `fluxes.cxx`, so
    the cell-centred fallback is compiled out of the production kernel instead of
-   multiplied by zero. Kills 12 provably-dead `gf_vels` loads that LLVM cannot
-   remove (`0.0 * x` needs `nnan` **and `nsz`** to fold — which is why probe 3's
-   `-ffinite-math-only` did not test it). Effectively bit-identical → golden
-   should be exactly 0, so it is worth shipping for the removed loads even if
-   AGPR-neutral. **Owed: `-Rpass` on the reduced build (does AGPR move off 32?),
-   then a full build, then golden.** This is the last genuine removal candidate.
+   multiplied by zero. Removed 12 provably-dead `gf_vels` loads and **moved not
+   one counter** (all 11 kernels identical) → **Lesson 9**, and route (a) "genuine
+   removal" is now closed with no candidates left.
+   **Keep the change**, with the claim restated: bit-identical, deletes 12 real
+   global loads (traffic, which `-Rpass` does not measure), removes a
+   multiply-by-zero. **No occupancy claim.** Still owed for it: a full build (the
+   reduced build never instantiates the `pplim=true` branch, which is where
+   bit-identity has to hold exactly) and a golden gate, expected exactly 0. Do not
+   spend a dedicated timing run on it — fold it into the next one.
 3. **THEN — the `launch_bounds` plumbing, now the primary route**
    (`launch-bounds-plan.md` Changes 1+2) — add a `min_blocks` template param to
    CarpetX `loop_box_device` in the user's fork at `../CarpetX`, routing to AMReX's
@@ -315,9 +375,11 @@ them invalidates golden + baseline.
    regresses, ship Idea-1 alone (occ-1, low scratch, fusion + `use_pplim` removal
    already banked) and stop chasing occ-2.
 6. **PR cleanup** (whichever route ships): revert or neutralise `4f902ca1`;
+   revert `2fd4595e` (`make.code.deps` — still hardwires `-Rpass` +
+   `-DASTERX_PROBE_IDEALGAS_ONLY`, so the binary aborts on pplim/hybrid/tabulated);
    rewrite the `#if 0` CCTK_DEBUG block (only on the serialization branch); reword
    `[golden-master]`/`PROBE` commit messages for upstream.
-4. **Independent of all occupancy work — the `tau` conditioning fix.** The fusion
+7. **Independent of all occupancy work — the `tau` conditioning fix.** The fusion
    probe was a register null but turned up a real numerical finding: `tau` loses up
    to ~8 decimal digits to cancellation *in production today* (measured
    `|Q/tau| ~ 5e7`), because `rho*W*(h*W-1)` is a small residual of two large

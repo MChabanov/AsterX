@@ -31,10 +31,13 @@ That probe round also surfaced two items with no occupancy claim attached:
 - **`tau` conditioning** — first section below. An accuracy defect in shipping code.
 - **the `vbar` dead-code finding** — 12 provably-dead `gf_vels` loads in the UCT
   block that LLVM cannot remove (`0.0 * x` needs `nnan` *and* `nsz` to fold),
-  fixed bit-identically with `if constexpr (pplim)`. **Implemented 2026-07-27,
-  measurement owed.** Unlike the fusion it removes *memory loads that must stay
-  live*, which is the category Lesson 8 says the allocator actually banks — so it
-  is the last genuine REMOVAL candidate, whatever its register outcome.
+  fixed bit-identically with `if constexpr (pplim)`. **Implemented and measured
+  2026-07-27: register NULL** (all 11 kernels byte-for-byte identical). The
+  "memory loads must stay live, so the allocator banks them" reasoning was wrong —
+  CHECKPOINT **Lesson 9**: registers are set by *peak* liveness and the UCT
+  epilogue is past the peak. Keep the change for the 12 removed loads (traffic,
+  clarity) with **no occupancy claim**; golden it, don't time it alone. With this,
+  **source-level removal is closed with no candidates left** — see Lesson 9.
 
 ## Context
 
