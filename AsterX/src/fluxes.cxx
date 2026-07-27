@@ -1531,7 +1531,28 @@ void CalcFluxAll(CCTK_ARGUMENTS, EOSType *eos_3p, const rec_var_t rec_var,
   const vect<CCTK_REAL, dim> dx = grid.dx;
   const vect<int, dim> lbnd = grid.lbnd;
 
-  grid.loop_box_device<0, 0, 0>(
+  /* ⚠ FRONTIER TRIAL ONLY -- REQUIRES THE FORKED CarpetX AND BREAKS CI.
+   *
+   * The 7th template argument is min_blocks, added by CarpetX branch
+   * `opt/loop-box-device-min-blocks` (MChabanov/CarpetX). Against stock CarpetX,
+   * whose signature is <CI, CJ, CK, VS, N, NT, typename F>, the `2` binds to
+   * `typename F` and this is a HARD COMPILE ERROR, not a graceful fallback --
+   * expect every CI job to fail until either that branch is upstreamed or this
+   * line is reverted to `grid.loop_box_device<0, 0, 0>(`.
+   *
+   * What it does: applies __launch_bounds__(256, 2) to THIS kernel only, forcing
+   * occupancy 2 on the unrolled, low-scratch (Idea-1) flux kernel and letting the
+   * allocator spill selectively -- as opposed to the Ideas-2/3 serialization,
+   * which reached occ-2 by demoting whole arrays to scratch (4984 vs 3448
+   * B/lane) and consequently won on the large grid but lost 8.9% on the small
+   * one. Success = occ 2 at scratch ~3448, then no small-grid regression.
+   * Rationale, measurements and the routes already exhausted:
+   * Planning/launch-bounds-plan.md and Planning/CHECKPOINT.md.
+   *
+   * launch_bounds is a codegen directive, so results must be unchanged: the
+   * golden gate is still expected to be exactly 0 (once CI can build it). */
+  grid.loop_box_device<0, 0, 0, /*VS*/ 1, /*N*/ 1, AMREX_GPU_MAX_THREADS,
+                       /*MB*/ 2>(
       bnd_min, bnd_max, fmin, fmax, [=] CCTK_DEVICE(const PointDesc &p) {
         // Force-capture fx here, before the if constexpr blocks below: nvcc
         // rejects an extended __device__ lambda that first-captures a variable
