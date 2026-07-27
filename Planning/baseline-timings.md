@@ -177,10 +177,11 @@ Crucially, the *genuine* occ-2 (−4.8%) is far short of the *forced* occ-2
 (−15.9%, global-launch_bounds on the same TOV run) — the gap is the scratch. So
 the lever is to reach occ-2 without the wholesale-demotion scratch.
 
-**Update 2026-07-25 — the lever is now compiler flags, not `launch_bounds`.** See
-`compiler-flags.md`; `launch-bounds-plan.md` is the fallback. Whichever route wins,
-its timings (both grid sizes, vs the Idea-1 baseline) go here next. Three things to
-carry into that measurement:
+**Update 2026-07-25 (SUPERSEDED — see the `launch_bounds` section below) — the
+lever is now compiler flags, not `launch_bounds`.** See `compiler-flags.md`;
+`launch-bounds-plan.md` is the fallback. Whichever route wins, its timings (both
+grid sizes, vs the Idea-1 baseline) go here next. Three things to carry into that
+measurement:
 
 - **The reduced probe build IS usable for timing** (idealgas, `use_pplim=no`, both
   CT schemes compiled) — but it is a *different compilation* from a full build
@@ -194,3 +195,63 @@ carry into that measurement:
   differ, per the caveat above). Now that `uct=0` is measured at occ-2 and `uct=1`
   at occ-1 in the same build, that confound is sharper than it looked: decide
   whether a matched pair is needed before drawing a grid-size conclusion.
+
+### ⭐ occ-2 via scoped `launch_bounds(256,2)` — fixed-metric subcycling / UCT / smaller grid (2026-07-27)
+
+CarpetX `opt/loop-box-device-min-blocks` @ `19267243` + AsterX `c96df5d5`
+(`MB=2` at the fused flux site). `-Rpass`: `uct1` 128 VGPR / 128 AGPR / 3608
+B/lane / **occ 2**, spills 0/0 (`launch-bounds-plan.md` §TRIAL RESULT).
+Side-by-side TimerReport, same par file, same iteration count:
+
+| timer | occ-2 (`MB=2`) | baseline | Δ |
+|---|---:|---:|---:|
+| **AsterX_Fluxes** | **81.958 s** | **115.639 s** | **−29.1 %** |
+| ODESolvers::Solve::rhs | 137.648 | 171.656 | −19.8 % |
+| ODESolvers::Solve | 339.148 | 373.177 | −9.1 % |
+| CCTK total time | 489.082 | 521.988 | −6.3 % |
+| Fluxes as fraction of Solve | 24.2 % | 31.0 % | **−6.8 pp** |
+
+**The win is isolated to the flux kernel, and the bookkeeping closes.** Fluxes
+−33.68 s, `Solve::rhs` −34.01 s, `Solve` −34.03 s: the entire RHS improvement is
+the flux kernel and nothing else. Every unrelated timer is flat inside ±1 % —
+`SetMetric` 99.244 vs 99.502, `SourceTerms` 30.471 vs 30.441, `Con2Prim` 17.818 vs
+17.866, `CalcAux` 10.374 vs 10.443, `OutputNorms` 89.578 vs 88.926, `AsterX_RHS`
+14.685 vs 14.967. That flatness is also the evidence the two runs are comparable
+in size and iteration count, and it independently confirms the scoping seen in
+`-Rpass`: no collateral anywhere (`Initialise` 5.8 vs 4.1 is startup, ignore).
+
+**This is the configuration the serialization LOST on.** Same fixed-metric
+subcycling / UCT / smaller grid where Ideas 2/3 measured **+8.9 %**; scoped
+`launch_bounds` measures **−29.1 %**. Sign flipped and multiplied. It also beats
+the old *global* forced-`launch_bounds` reference (−15.9 %, on TOV) in relative
+terms, without that test's Z4c collateral. Mechanism, consistent with everything
+in `CHECKPOINT.md` Lesson 3: this kernel is latency-bound, a second resident wave
+buys latency hiding, and the +160 B/lane of extra scratch is small enough not to
+eat it — unlike the serialization's +1536.
+
+**⚠ CONFOUND — two changes at once; the headline is not yet a clean measurement.**
+The occ-2 run is the **reduced** build (`-DASTERX_PROBE_IDEALGAS_ONLY`, 2
+instantiations) while the baseline is a **full** build (the `use_pplim`
+compile-time commit). The methodology note above says to time the full build, and
+this run does not. So −29.1 % is (instantiation cut + `MB=2`) versus neither.
+
+How much could the cut alone be worth? Probably little: at `MB=0` the reduced
+build was still 256/**32**/3448/**occ-1**, i.e. the cut changed neither occupancy
+nor scratch, and only 8 AGPRs separate it from the full build's 40 — both occ-1.
+So the occupancy doubling is the plausible cause of essentially all of it. But
+"plausible" is not "measured", and the reduced build IS a different compilation
+(different inlining of the shared ReconX/EOS callees).
+
+**The control that settles it is cheap: same reduced build, flip `MB` to 0, rerun
+the same par file.** That isolates `launch_bounds` from the instantiation cut in
+one run, and it doubles as the sanity check that `MB=0` reproduces occ-1. Do this
+before quoting −29 % anywhere.
+
+Also still owed: **TOV-large / flux-CT** (where `uct0` was already occ-2 in the
+reduced build, so expect neutral-to-slightly-negative — a flat result there is not
+failure), a **full-build** re-measurement, and the **golden gate** (expected
+exactly 0; `launch_bounds` is a codegen directive).
+
+Cross-run caveat: the small-grid baseline in the serialization table above reads
+125.9 s for `AsterX_Fluxes` where this baseline reads 115.639 s — different
+baseline builds/runs, so compare the two experiments by **fraction, not seconds**.

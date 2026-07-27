@@ -82,10 +82,19 @@ still open**, and both closures are measurements, not guesses:
    The two plan corrections held (the replication calls
    `amrex::detail::call_f_intvect_handler`; the 7th template argument does break
    stock-CarpetX builds).
-   **Open: TIMING at both grid sizes — the only remaining question.** Note the
-   likely sign flip vs the serialization: TOV-large is flux-CT (`uct0`, which the
-   reduced build says was already occ-2, so possibly nothing to gain and +48
-   B/lane to lose), while UCT-small is the kernel that actually gained a wave.
+   **⭐ TIMED 2026-07-27, UCT-small: `AsterX_Fluxes` −29.1 %** (81.958 vs 115.639 s),
+   −6.8 pp of Solve, −6.3 % CCTK total, every unrelated timer flat inside ±1 %.
+   **This is the configuration the serialization LOST on (+8.9 %)**, and it beats
+   the old global-`launch_bounds` reference (−15.9 % on TOV) without that test's
+   Z4c collateral. Full table: `baseline-timings.md`.
+   **⚠ Confounded: occ-2 run is the REDUCED build, baseline is a FULL build** — two
+   changes at once. The control is cheap and should be run before the number is
+   quoted: same reduced build, `MB=0`, same par file. (The cut alone is probably
+   worth little — at `MB=0` the reduced build was still 256/32/3448/occ-1 — but
+   that is inference, not measurement.)
+   Still owed: that control, TOV-large/flux-CT (where `uct0` was already occ-2, so
+   neutral-to-slightly-negative is the expectation, not failure), a full-build
+   re-measurement, and the golden gate (expected exactly 0).
 
 Two by-products worth more than the occupancy hunt so far, both in
 `flux-construction.md`: **`tau` loses up to ~8 digits to cancellation in
