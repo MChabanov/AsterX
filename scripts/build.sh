@@ -9,6 +9,17 @@ cd "$WORKSPACE"
 
 cd Cactus
 
+# SimFactory commit 2718e43 added db.ini with the same [db] section already
+# present in db1.hpc.lsu.edu.ini. Its loader rejects duplicate machine names
+# before honoring --machine, so this otherwise unrelated entry breaks CI.
+# Disable only that exact conflict and leave the workaround dormant once
+# SimFactory fixes either machine definition.
+if grep -Fxq '[db]' ./simfactory/mdb/machines/db.ini 2>/dev/null && \
+        grep -Fxq '[db]' ./simfactory/mdb/machines/db1.hpc.lsu.edu.ini 2>/dev/null; then
+    mv ./simfactory/mdb/machines/db.ini \
+        ./simfactory/mdb/machines/db.ini.disabled
+fi
+
 # Set up SimFactory
 cp "$ASTERXSPACE/scripts/actions-$ACCELERATOR-$REAL_PRECISION.cfg" ./simfactory/mdb/optionlists
 cp "$ASTERXSPACE/scripts/actions-$ACCELERATOR-$REAL_PRECISION.ini" ./simfactory/mdb/machines
